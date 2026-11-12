@@ -12,6 +12,14 @@ export interface DeviceTrustPlugin {
     getDeviceInfo(): Promise<{ securityLevel?: "TEE" | "STRONGBOX"; strongBox: boolean; sdkInt: number; securityPatch: string }>;
     vaultWrap(o: { data: string; purpose: VaultPurpose }): Promise<{ blob: string }>;
     vaultUnwrap(o: { blob: string; purpose: VaultPurpose }): Promise<{ data: string }>;
+    // Secret chats (spec 001, story 6): the keys and the sessions live in the app's library. `peer` is the
+    // peer's account id. A refusal rejects with `code` from the library's closed list (features/e2ee).
+    e2eeEncrypt(o: { peer: string; text: string }): Promise<{ envelope: string }>;
+    e2eeDecrypt(o: { peer: string; envelope: string }): Promise<{ text: string }>;
+    e2eePeerState(o: { peer: string }): Promise<{ trust: "unverified" | "passport" | "verified" | "reverify"; keyChanged: boolean }>;
+    e2eeSafetyNumber(o: { peer: string }): Promise<{ digits?: string }>;
+    e2eeSetVerified(o: { peer: string; verified: boolean }): Promise<void>;
+    e2eeResetSession(o: { peer: string }): Promise<void>;
 }
 
 /** `Files` plugin (S1 §5.4): the native side downloads `url` (app host only) into a file the user picks. */

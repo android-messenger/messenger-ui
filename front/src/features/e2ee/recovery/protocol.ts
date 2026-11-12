@@ -1,12 +1,11 @@
-import {ensureProvisioned} from "../lib/provisioning.ts";
-import {encryptRecovery, decryptRecovery, type RecoverCipher} from "../lib/secretSession.ts";
+import {secretCrypto, type RecoverCipher} from "../crypto.ts";
 import {loadPlaintextRecord, E2EE_PLAINTEXT_TTL_MS} from "../lib/atRest.ts";
 import {logger} from "@/shared/logger/logger.ts";
 
 // The recovery protocol messages (ride the opaque SIGNAL channel, so `from`/`to`/`conversationId` are added
 // by the transport). clientIds are NOT secret; only the recovered message bodies are (re-encrypted). The
-// re-encryption runs on a DEDICATED, orthogonal session (see secretSession.encryptRecovery) so it repairs
-// a genuinely STALLED ratchet — a repair sent on the normal chain would land past the same gap.
+// re-encryption never rides the stalled chain — a repair sent there would land past the same gap: the
+// browser implementation uses a dedicated session, the Android app starts a new one (secretCrypto).
 export const RECOVER_REQ = "e2ee:recover-req";
 export const RECOVER_RESP = "e2ee:recover-resp";
 
@@ -38,7 +37,6 @@ export function buildRequest(peerId: string, chatId: string, clientIds: string[]
  * requester has no keys right now) we still return the NACKs, and the requester retries the rest.
  */
 export async function buildResponse(requesterId: string, chatId: string, clientIds: string[]): Promise<RecoverResp> {
-    const {store} = await ensureProvisioned();
     const have: Array<{mid: string; text: string}> = [];
     const missing: string[] = [];
     for (const clientId of clientIds.slice(0, MAX_RECOVER_BATCH)) {
@@ -48,7 +46,7 @@ export async function buildResponse(requesterId: string, chatId: string, clientI
     }
     let ciphers: RecoverCipher[] = [];
     if (have.length) {
-        try { ciphers = await encryptRecovery(store, requesterId, chatId, have); }
+        try { ciphers = await secretCrypto.encryptRecovery(requesterId, chatId, have); }
         catch (e) { logger.warn("e2ee recovery: re-encrypt failed; NACKing the rest, requester will retry", e as Error); }
     }
     logger.info("e2ee recovery: responding", {requesterId, chatId, recover: ciphers.length, missing: missing.length});
@@ -57,7 +55,6 @@ export async function buildResponse(requesterId: string, chatId: string, clientI
 
 /** Requester side: decrypt each recovered item on the recovery session, verifying its binding to chatId. */
 export async function applyResponse(senderId: string, chatId: string, items: RecoverCipher[]): Promise<Array<{forClientId: string; plaintext: string}>> {
-    const {store} = await ensureProvisioned();
-    const recovered = await decryptRecovery(store, senderId, chatId, items);
+    const recovered = await secretCrypto.decryptRecovery(senderId, chatId, items);
     return recovered.map((r) => ({ forClientId: r.mid, plaintext: r.text }));
 }

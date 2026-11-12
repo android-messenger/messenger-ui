@@ -7,8 +7,7 @@ import {secretStateKey} from "../lib/failure.ts";
 import {addPending, allPending, bumpAttempt, removePending, type PendingItem} from "./pendingStore.ts";
 import {RECOVER_REQ, RECOVER_RESP, buildRequest, buildResponse, applyResponse, type RecoverReq, type RecoverResp} from "./protocol.ts";
 import {REKEY_HINT, makeThrottle, REKEY_COALESCE_MS} from "../lib/rekeyHint.ts";
-import {invalidatePeer} from "../lib/secretSession.ts";
-import {ensureProvisioned} from "../lib/provisioning.ts";
+import {secretCrypto} from "../crypto.ts";
 import {presenceJoin, type ClientData} from "@/features/presence/model/presenceSlice.ts";
 
 // Coalesce inbound rekey hints: at most one roster re-resolve per peer per window (a spoofed/flooded hint
@@ -151,8 +150,7 @@ export const e2eeRecoveryMiddleware: Middleware = (store) => {
                 const peer = f.from;
                 if (rekeyActThrottle(peer)) void (async () => {
                     try {
-                        const {store} = await ensureProvisioned();
-                        await invalidatePeer(store, peer);
+                        await secretCrypto.resetSession(peer);
                         logger.info("e2ee: rekey hint → peer roster invalidated", {peer});
                     } catch (e) { logger.warn("e2ee: rekey hint handling failed", e as Error); }
                 })();

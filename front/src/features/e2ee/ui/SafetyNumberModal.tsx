@@ -3,6 +3,8 @@ import {useTranslation} from "react-i18next";
 import {secretCrypto, formatSafetyNumber} from "../index.ts";
 import {ensureProvisioned} from "../lib/provisioning.ts";
 import {reconcilePeerIdentities} from "../lib/secretSession.ts";
+import {isNativeApp} from "@/shared/platform.ts";
+import {dismissKeyChanged} from "../lib/keyChange.ts";
 
 /**
  * Safety-number verification (MITM check). Shows the fingerprint derived from both parties' identity keys;
@@ -22,7 +24,8 @@ export function SafetyNumberModal({peerUserId, peerName, onClose}: {
             // Reconcile with the directory's CURRENT roster FIRST: re-pin the live device identity and prune
             // any dead ones left by the peer's past re-provisions. Without this, getPeerIdentity (find-first)
             // may hash a stale device's key and the number never matches. Then compute over the fresh state.
-            try {
+            // (Browser only: in the Android app the library holds the peer's key and checked its passport.)
+            if (!isNativeApp()) try {
                 const {store} = await ensureProvisioned();
                 await reconcilePeerIdentities(store, peerUserId);
             } catch { /* offline / no keys — fall back to whatever is stored */ }
@@ -38,7 +41,8 @@ export function SafetyNumberModal({peerUserId, peerName, onClose}: {
     const toggle = () => {
         if (!num) return;
         const next = !verified;
-        void secretCrypto.setVerified(peerUserId, next).then(() => setVerified(next), () => { /* no number → stays as it was */ });
+        // Verifying again — or taking the mark off — is also what lets messages go out after a key change.
+        void secretCrypto.setVerified(peerUserId, next).then(() => { setVerified(next); dismissKeyChanged(peerUserId); }, () => { /* no number → stays as it was */ });
     };
 
     return (

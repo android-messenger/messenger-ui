@@ -7,6 +7,7 @@ import {upsertMessage} from "@/features/chat/model/historyCache.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {preserveSelectedConversation} from "@/features/chat/model/preserveSelectedConversation.ts";
 import {secretCrypto, savePlaintext, deletePlaintextForChat} from "@/features/e2ee";
+import {sendFailureKey} from "@/features/e2ee/wire.ts";
 import {deleteChatCache} from "@/features/chat/db/db.ts";
 import toast from "react-hot-toast";
 import i18n from "@/shared/i18n";
@@ -114,9 +115,9 @@ export const chatMessagesService = {
                 wireText = await secretCrypto.encrypt(recipientId, text);
             } catch (e) {
                 logger.error("e2ee: encrypt failed — NOT sending (fail-closed)", e as Error);
-                // A peer with no keys yet gets a specific, actionable message; anything else is generic.
-                const peerless = e instanceof Error && e.message === "NO_PEER_KEYS";
-                toast.error(i18n.t(peerless ? "chat.peerNoKeys" : "chat.encryptFailed"));
+                // The user is told why (no device, not in the app, a key that failed the check, a verified
+                // contact whose key changed, no connection to the key directory); anything else is generic.
+                toast.error(i18n.t(sendFailureKey(e)));
                 return;
             }
         }

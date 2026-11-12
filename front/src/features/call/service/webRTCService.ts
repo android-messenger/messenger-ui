@@ -7,6 +7,7 @@ import type {
 } from "@/features/call/model/types.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {secretCrypto} from "@/features/e2ee";
+import {sendFailureKey} from "@/features/e2ee/wire.ts";
 import toast from "react-hot-toast";
 import i18n from "@/shared/i18n";
 
@@ -101,9 +102,8 @@ export class WebRTCService {
        downgrade + MITM), so the call is torn down and the user is told why.
     ====================== */
     private e2eeFail(err: unknown) {
-        const peerless = err instanceof Error && err.message === "NO_PEER_KEYS";
         logger.warn("call: E2EE signaling failed — ending (no plaintext fallback)", err as Error);
-        toast.error(i18n.t(peerless ? "chat.peerNoKeys" : "chat.encryptFailed"));
+        toast.error(i18n.t(sendFailureKey(err)));
         this.cleanup();
         this.onEnded?.();
     }

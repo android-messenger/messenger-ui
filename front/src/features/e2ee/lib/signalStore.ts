@@ -55,6 +55,18 @@ export class SignalStore implements StorageType {
     async setOwner(userId: string): Promise<void> {
         await (await this.db()).put(META, userId, "owner");
     }
+    /**
+     * Erases every key, session and remembered peer and keeps only whose data this is. For the Android
+     * app after its move to the native library (spec 001, FR-058): nothing here is a key any more.
+     */
+    async dropKeys(): Promise<void> {
+        const d = await this.db();
+        const owner = await d.get(META, "owner");
+        const tx = d.transaction([META, PREKEYS, SIGNED, SESSIONS, PEERS, ROSTER], "readwrite");
+        for (const s of [META, PREKEYS, SIGNED, SESSIONS, PEERS, ROSTER]) await tx.objectStore(s).clear();
+        if (owner !== undefined) await tx.objectStore(META).put(owner, "owner");
+        await tx.done;
+    }
     /** True when the store holds an identity — without unwrapping it (no Vault call). */
     async hasIdentity(): Promise<boolean> {
         return (await (await this.db()).getKey(META, "identity")) !== undefined;

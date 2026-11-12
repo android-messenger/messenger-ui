@@ -3,6 +3,9 @@ import {SignalStore} from "./signalStore.ts";
 import {forgetDeviceKey, abortVaultWaits} from "./deviceKey.ts";
 import {deleteSelf} from "./keyDirectory.ts";
 import {logger} from "@/shared/logger/logger.ts";
+import {isNativeApp} from "@/shared/platform.ts";
+import {forgetKeyChanges} from "./keyChange.ts";
+import {E2EE_LS} from "./stores.ts";
 
 // Logout wipe (spec 001, story 1; finding 13). After a logout the device holds no E2EE keys, no secret
 // history and no marks: the next user of this device inherits nothing, and the same user who logs in
@@ -37,6 +40,7 @@ function deleteDb(name: string): Promise<boolean> {
 export async function wipeE2eeData(): Promise<void> {
     lsSet(E2EE_WIPE_PENDING_KEY, "1");
     abortVaultWaits();   // nothing may keep waiting for the Vault across a logout
+    forgetKeyChanges();
     forgetDeviceKey();
     let allGone = false;
     try {
@@ -68,6 +72,8 @@ const DIRECTORY_TIMEOUT_MS = 4_000;
  * asking to delete the phone's record), 401, an unreachable directory or a slow one never stop a logout.
  */
 export async function removeFromKeyDirectory(): Promise<void> {
+    // In the Android app the record belongs to the app's library, which keeps it while the device is enrolled.
+    if (isNativeApp()) return;
     try {
         // The device id is stored in the clear; a device that never provisioned has nothing to remove.
         const deviceId = await new SignalStore().getDeviceId();
@@ -104,4 +110,25 @@ export async function ensureE2eeOwner(userId: string): Promise<boolean> {
         logger.warn("e2ee: owner check failed", e as Error);
     }
     return wiped;
+}
+
+/** Set once the Android app's interface has dropped its own keys (FR-058). Not user data. */
+export const E2EE_NATIVE_KEYS_KEY = "wolp.e2eeNativeKeys";
+
+/**
+ * The Android app, first start of the version whose keys live in the app's library (spec 001, FR-058):
+ * the identity key, prekeys, sessions and remembered peers the interface used to keep are erased, and so
+ * are its "verified" marks — the library keeps its own. Stored message texts stay. Runs once; a failure
+ * is repeated on the next start. Never throws.
+ */
+export async function dropInterfaceKeys(): Promise<void> {
+    if (!isNativeApp() || lsGet(E2EE_NATIVE_KEYS_KEY) !== null) return;
+    try {
+        await new SignalStore().dropKeys();
+        lsRemove(E2EE_LS.verified);
+        lsSet(E2EE_NATIVE_KEYS_KEY, "1");
+        logger.info("e2ee: the interface's own keys are erased — the app's library holds the keys now");
+    } catch (e) {
+        logger.warn("e2ee: the interface's own keys were not erased; repeated on the next start", e as Error);
+    }
 }
