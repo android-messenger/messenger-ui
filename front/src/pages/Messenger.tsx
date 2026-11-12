@@ -67,8 +67,9 @@ export default function Messenger() {
 
     // Deep link from an INCOMING-CALL push (SW notificationclick "Answer"):
     //   ?call=<conversationId>&caller=<callerUserId>
-    // Open the conversation and call the caller back — the original WebRTC offer is stale by the time
-    // the app cold-starts, so "answering" re-initiates the call to them. Then strip the params.
+    // Open the conversation and tell the caller we are here (call:ready) — the original WebRTC offer is
+    // stale by the time the app cold-starts, so the caller re-sends it. Nobody is called back. Then strip
+    // the params. The address never says "already accepted": see features/call/model/nativeAccept.ts.
     // Once per link: the effect re-runs on every render while ?call= is still in the URL (openChat is a new
     // function each render), and each run used to send another call:ready — the caller then restarted ICE
     // once per call:ready, and an answer to an older offer never connected (seen with auto-accept, S1 §7.3).
@@ -82,14 +83,14 @@ export default function Messenger() {
         openChat(link.conversationId);
         // Answer flow: tell the still-ringing caller "I'm here" so they re-send the offer and we show a
         // real INCOMING dialog. conversationId comes from the push (survives a cold start before getChats
-        // loads). Falls back to a glare callback if no offer arrives (see callMiddleware answerViaPush).
+        // loads). If no offer arrives, nothing happens (see callMiddleware answerViaPush: no callback).
         dispatch(answerViaPush({peerId: link.peerId, conversationId: link.conversationId, media: link.media, autoAccept: takeNativeAccept(link.peerId, link.conversationId)}));
         void clearPendingCall();   // the deep-link handled it — don't let the boot check re-fire
         const next = new URLSearchParams(searchParams);
         next.delete("call");
         next.delete("caller");
         next.delete("media");
-        next.delete("accept");
+        next.delete("accept");   // not read any more; an old link may still carry it
         setSearchParams(next, {replace: true});
     }, [searchParams, openChat, dispatch, setSearchParams]);
 
