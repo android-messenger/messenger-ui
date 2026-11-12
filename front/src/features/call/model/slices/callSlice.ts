@@ -1,7 +1,9 @@
 import {createSlice, type PayloadAction} from "@reduxjs/toolkit";
 import type {CallMedia, FromOffer} from "@/features/call/model/types.ts";
 
-type PendingPushAnswer = { peerId: string; conversationId: string; media?: CallMedia; autoAccept?: boolean };
+type PendingPushAnswer = { peerId: string; conversationId: string; media?: CallMedia; autoAccept?: boolean; autoAcceptUntil?: number };
+/** How long an answer given on the native screen stands: the caller's re-sent offer comes within seconds. */
+export const AUTO_ACCEPT_MS = 45_000;
 
 const callSlice = createSlice({
   name: "call",
@@ -19,6 +21,8 @@ const callSlice = createSlice({
     // Android app (S1 §7.3): the user accepted on the native incoming-call screen → the re-sent offer from
     // this peer is answered at once (callMiddleware). Cleared by that offer or any end of the call.
     autoAcceptFrom: null as string | null,
+    // …and only until this moment (ms): an answer that found no offer must not wait for a later call.
+    autoAcceptUntil: null as number | null,
     incomingOfferData: null as FromOffer | null,
     // Current call is audio-only (voice) → the UI hides video and the service opens no camera.
     audioOnly: false,
@@ -35,10 +39,14 @@ const callSlice = createSlice({
     // later answer/ice — route correctly even before getChats loads) but stay IDLE, so when the caller
     // re-offers we ring a real INCOMING dialog rather than auto-answering. The pending intent is flushed
     // by callMiddleware once the WS is connected (a cold start opens the socket only after this fires).
-    answerViaPush: (state, action: PayloadAction<PendingPushAnswer>) => {
-      state.conversationId = action.payload.conversationId;
-      state.pendingPushAnswer = action.payload;
-      state.autoAcceptFrom = action.payload.autoAccept ? action.payload.peerId : null;
+    answerViaPush: {
+      reducer: (state, action: PayloadAction<PendingPushAnswer>) => {
+        state.conversationId = action.payload.conversationId;
+        state.pendingPushAnswer = action.payload;
+        state.autoAcceptFrom = action.payload.autoAccept ? action.payload.peerId : null;
+        state.autoAcceptUntil = action.payload.autoAccept ? action.payload.autoAcceptUntil ?? null : null;
+      },
+      prepare: (p: PendingPushAnswer) => ({payload: p.autoAccept ? {...p, autoAcceptUntil: p.autoAcceptUntil ?? Date.now() + AUTO_ACCEPT_MS} : p}),
     },
 
     // The pending push-answer has been sent (call:ready dispatched) — don't re-send on the next connect.
@@ -57,6 +65,7 @@ const callSlice = createSlice({
       if (action.payload.conversationId) state.conversationId = action.payload.conversationId;
       state.pendingPushAnswer = null; // the caller's (re)offer arrived → no glare fallback needed
       state.autoAcceptFrom = null;
+      state.autoAcceptUntil = null;
     },
 
     acceptCall: (state) => {
@@ -81,6 +90,7 @@ const callSlice = createSlice({
       state.pendingPushAnswer = null;
       state.incomingOfferData = null;
       state.autoAcceptFrom = null;
+      state.autoAcceptUntil = null;
       state.audioOnly = false;
     },
 
@@ -94,6 +104,7 @@ const callSlice = createSlice({
       state.pendingPushAnswer = null;
       state.incomingOfferData = null;
       state.autoAcceptFrom = null;
+      state.autoAcceptUntil = null;
       state.audioOnly = false;
     },
 
@@ -108,6 +119,7 @@ const callSlice = createSlice({
       state.pendingPushAnswer = null;
       state.incomingOfferData = null;
       state.autoAcceptFrom = null;
+      state.autoAcceptUntil = null;
       state.audioOnly = false;
     },
   },

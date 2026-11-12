@@ -214,6 +214,22 @@ describe("logout wipes E2EE keys and secret data", () => {
         expect(localStorage.getItem("wolp.e2eeVerified")).toContain("peer-1");
     });
 
+    // Audit 2026-11-12, finding 6: with no network Kratos cannot end the session and the cookie is HttpOnly —
+    // the app is asked to end it and to erase the cookies whatever the server said.
+    it("in the Android app a logout without network still ends the session on the phone", async () => {
+        const store = await loggedInStoreWithData();
+        const fetchWas = globalThis.fetch;
+        globalThis.fetch = vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
+        const plugin = {e2eeWipe: vi.fn(async () => {}), sessionEnd: vi.fn(async () => ({ended: false}))};
+        const g = globalThis as {Capacitor?: unknown};
+        g.Capacitor = {isNativePlatform: () => true, Plugins: {DeviceTrust: plugin}};
+        try {
+            await fullLogout(store.dispatch);
+        } finally { delete g.Capacitor; globalThis.fetch = fetchWas; }
+        expect(plugin.sessionEnd).toHaveBeenCalledTimes(1);
+        expect(plugin.e2eeWipe.mock.invocationCallOrder[0]).toBeLessThan(plugin.sessionEnd.mock.invocationCallOrder[0]);
+    });
+
     it("a locked Vault in the Android app does not hold the logout up: nothing is decrypted", async () => {
         const store = await loggedInStoreWithData();
         const locked = () => Promise.reject(Object.assign(new Error("locked"), {code: "VAULT_LOCKED"}));

@@ -18,9 +18,9 @@ describe("parseCallDeepLink", () => {
             .toEqual({ conversationId: "conv-1", peerId: "user-2", media: undefined });
     });
 
-    it("accept=1 (Android native «Принять», S1 §7.3) → autoAccept; anything else → no flag", () => {
+    it("accept=1 in the address means nothing: a link cannot answer a call (audit 2026-11-12, finding Б)", () => {
         expect(parseCallDeepLink(new URLSearchParams("call=conv-1&caller=user-2&media=video&accept=1")))
-            .toEqual({ conversationId: "conv-1", peerId: "user-2", media: "video", autoAccept: true });
+            .toEqual({ conversationId: "conv-1", peerId: "user-2", media: "video" });
         expect(parseCallDeepLink(new URLSearchParams("call=conv-1&caller=user-2&accept=yes")))
             .toEqual({ conversationId: "conv-1", peerId: "user-2", media: undefined });
     });

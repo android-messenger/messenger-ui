@@ -3,12 +3,13 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 
 // Spec 001, story 6 against a stand-in bridge (T063, T068): what the interface does in the Android app
 // when the keys live in the app's library. The stand-in keeps the library's rules that matter here — a
-// closed list of refusals, a "key changed" mark that is handed over once, no keys in any answer.
+// closed list of refusals, a "key changed" mark that stays until the user closes the notice, a "verified"
+// mark bound to the number that was on the screen, no keys in any answer.
 
 type Trust = "unverified" | "passport" | "verified" | "reverify";
 const refuse = (code: string) => Object.assign(new Error("e2ee refused"), {code});
 
-/** The six bridge operations, scriptable per peer. */
+/** The bridge operations, scriptable per peer. */
 function fakeBridge() {
     const peers = new Map<string, {trust: Trust; keyChanged: boolean; fail?: string; session: number}>();
     const peer = (id: string) => peers.get(id) ?? peers.set(id, {trust: "unverified", keyChanged: false, session: 1}).get(id)!;
@@ -38,18 +39,23 @@ function fakeBridge() {
             async e2eePeerState({peer: id}: {peer: string}) {
                 gate("peerState");
                 const p = peer(id);
-                const changed = p.keyChanged;
-                p.keyChanged = false;                       // read once
-                return {trust: p.trust, keyChanged: changed};
+                return {trust: p.trust, keyChanged: p.keyChanged};   // reading does not take the mark off
             },
             async e2eeSafetyNumber({peer: id}: {peer: string}) {
                 gate("safetyNumber");
                 return peer(id).trust === "unverified" ? {} : {digits: "1".repeat(60)};
             },
-            async e2eeSetVerified({peer: id, verified}: {peer: string; verified: boolean}) {
+            async e2eeSetVerified({peer: id, verified, digits}: {peer: string; verified: boolean; digits?: string}) {
                 gate("setVerified");
                 const p = peer(id);
-                if (p.trust !== "unverified") p.trust = verified ? "verified" : "passport";
+                if (p.trust === "unverified") return;
+                if (verified && digits !== "1".repeat(60)) throw refuse("reverify");   // not the current key's number
+                p.trust = verified ? "verified" : "passport";
+                p.keyChanged = false;
+            },
+            async e2eeKeyChangeSeen({peer: id}: {peer: string}) {
+                gate("keyChangeSeen");
+                peer(id).keyChanged = false;
             },
             async e2eeResetSession({peer: id}: {peer: string}) {
                 gate("resetSession");
@@ -122,10 +128,17 @@ describe("secret chats in the Android app go through the bridge", () => {
         await settle();
         expect(keyChange.keyChangedPeers()).toEqual(["bob"]);
 
-        keyChange.dismissKeyChanged("bob");
+        // audit 2026-11-12, finding 2: the mark is the library's — a reload (nothing left in memory) and
+        // any number of reads do not lose it
+        keyChange.forgetKeyChanges();
         await secretCrypto.encrypt("bob", "three");
         await settle();
-        expect(keyChange.keyChangedPeers()).toEqual([]);   // the library handed the mark over once
+        expect(keyChange.keyChangedPeers()).toEqual(["bob"]);
+
+        await secretCrypto.keyChangeSeen("bob");            // the user closed the line
+        await secretCrypto.encrypt("bob", "four");
+        await settle();
+        expect(keyChange.keyChangedPeers()).toEqual([]);
 
         bridge.peer("carol").keyChanged = true;
         await secretCrypto.encrypt("carol", "x");
@@ -136,7 +149,7 @@ describe("secret chats in the Android app go through the bridge", () => {
     it("6.5 — a verified contact whose key changed gets nothing until the user verifies again", async () => {
         const {secretCrypto, keyChange, failure} = await load();
         await secretCrypto.encrypt("bob", "x");
-        await secretCrypto.setVerified("bob", true);
+        await secretCrypto.setVerified("bob", true, "1".repeat(60));
         expect((await secretCrypto.peerState("bob")).trust).toBe("verified");
 
         bridge.peer("bob").trust = "reverify";
@@ -145,7 +158,11 @@ describe("secret chats in the Android app go through the bridge", () => {
         expect(keyChange.keyChangedPeers()).toEqual(["bob"]);
         expect((await secretCrypto.peerState("bob")).trust).toBe("reverify");
 
-        await secretCrypto.setVerified("bob", true);
+        // audit 2026-11-12, finding 3: the number of another key does not set the mark
+        await expect(secretCrypto.setVerified("bob", true, "2".repeat(60))).rejects.toMatchObject({code: "reverify"});
+        expect((await secretCrypto.peerState("bob")).trust).toBe("reverify");
+
+        await secretCrypto.setVerified("bob", true, "1".repeat(60));
         expect(await secretCrypto.encrypt("bob", "y")).toContain("E2EE2:");
     });
 

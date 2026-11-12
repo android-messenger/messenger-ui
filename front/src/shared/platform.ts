@@ -18,10 +18,15 @@ export interface DeviceTrustPlugin {
     e2eeDecrypt(o: { peer: string; envelope: string }): Promise<{ text: string }>;
     e2eePeerState(o: { peer: string }): Promise<{ trust: "unverified" | "passport" | "verified" | "reverify"; keyChanged: boolean }>;
     e2eeSafetyNumber(o: { peer: string }): Promise<{ digits?: string }>;
-    e2eeSetVerified(o: { peer: string; verified: boolean }): Promise<void>;
+    /** `digits` — the safety number that was on the screen; another key by now → refused with `reverify`. */
+    e2eeSetVerified(o: { peer: string; verified: boolean; digits?: string }): Promise<void>;
+    /** The user closed the "key changed" notice; until then e2eePeerState keeps saying keyChanged. */
+    e2eeKeyChangeSeen(o: { peer: string }): Promise<void>;
     e2eeResetSession(o: { peer: string }): Promise<void>;
     /** Sign-out: the app erases its keys, sessions and marks and takes its record out of the key directory. */
     e2eeWipe(): Promise<void>;
+    /** Sign-out, the last step: ends the Kratos session if the server answers and erases the cookies anyway. */
+    sessionEnd(): Promise<{ ended: boolean }>;
 }
 
 /** `Files` plugin (S1 §5.4): the native side downloads `url` (app host only) into a file the user picks. */

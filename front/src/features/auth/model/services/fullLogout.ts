@@ -4,6 +4,10 @@ import {logoutResetClientState} from "@/store/logout.ts";
 import {removePushSubscription} from "@/features/notifications";
 import {apiOrigin} from "@/shared/config/api.ts";
 import {removeFromKeyDirectory, wipeE2eeData} from "@/features/e2ee";
+import {deviceTrust, isNativeApp} from "@/shared/platform.ts";
+
+/** A sign-out never hangs on the app's attempt to reach Kratos. */
+const NATIVE_SESSION_END_TIMEOUT_MS = 8_000;
 
 /**
  * The logout sequence (S1 §6 order): push subscription and key-directory record (both need the live
@@ -34,6 +38,15 @@ export async function fullLogout(dispatch: AppDispatch): Promise<void> {
     // means we don't follow Kratos' redirect; the Set-Cookie that clears the session still
     // applies (same-origin), so the session is dead and we control the destination.
     if (target) await fetch(target, {credentials: "include", redirect: "manual"}).catch(() => {});
+    // Android app: the session cookie is HttpOnly, so with no network the steps above leave it in place and
+    // the user is signed in again on the next start (audit 2026-11-12, finding 6). The app ends the session
+    // itself when it can and erases the cookies in any case.
+    if (isNativeApp()) {
+        await Promise.race([
+            Promise.resolve().then(() => deviceTrust().sessionEnd()).catch(() => {}),
+            new Promise<void>((resolve) => setTimeout(resolve, NATIVE_SESSION_END_TIMEOUT_MS)),
+        ]);
+    }
 }
 
 /** Full navigation to the login page after a logout. Separate so tests can replace it. */

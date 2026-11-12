@@ -6,7 +6,7 @@
  * call, or a cold start (getChats not loaded yet) fails the "do we have a conversation?" guard and shows
  * "open a chat with this contact first". Returns null when the params aren't a complete call link.
  */
-export function parseCallDeepLink(params: URLSearchParams): { peerId: string; conversationId: string; media?: "audio" | "video"; autoAccept?: boolean } | null {
+export function parseCallDeepLink(params: URLSearchParams): { peerId: string; conversationId: string; media?: "audio" | "video" } | null {
     const conversationId = params.get("call");
     const peerId = params.get("caller");
     if (!conversationId || !peerId) return null;
@@ -14,7 +14,7 @@ export function parseCallDeepLink(params: URLSearchParams): { peerId: string; co
     // an audio call audio (otherwise it would default to video). Absent → left undefined.
     const m = params.get("media");
     const media = m === "audio" || m === "video" ? m : undefined;
-    // Android app (S1 §7.3): `accept=1` — the user already pressed «Принять» on the native incoming-call
-    // screen, so the caller's re-sent offer is answered without a second in-app dialog.
-    return params.get("accept") === "1" ? { peerId, conversationId, media, autoAccept: true } : { peerId, conversationId, media };
+    // Nothing in the address can say "already accepted": a link is something anybody can send. In the
+    // Android app that answer comes from the native screen (features/call/model/nativeAccept.ts).
+    return { peerId, conversationId, media };
 }
