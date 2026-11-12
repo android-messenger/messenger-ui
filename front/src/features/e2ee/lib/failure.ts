@@ -15,10 +15,19 @@ export type DecryptFailure =
     | "no-session"    // no session/identity for this sender/device yet
     | "wrong-device"  // the envelope carries no ciphertext for THIS device → the sender has a stale device roster
     | "corrupt"       // malformed envelope / undecodable ciphertext (not recoverable by re-request)
+    | "untrusted"     // the app refused the sender's key: no passport, a passport that failed, several devices
     | "unknown";
 
 /** Classify a raw error thrown by the ratchet/seam into the taxonomy above (best-effort on message text). */
 export function classifyDecryptError(e: unknown): DecryptFailure {
+    // The Android app's library names the reason itself (a closed list); nothing to guess from a message.
+    switch (refusalCode(e)) {
+        case "duplicate": return "duplicate";
+        case "undecryptable": return "hard-gap";        // the sender re-encrypts it in a new session
+        case "no_passport": case "bad_passport": case "multi_device": return "untrusted";
+        case undefined: break;
+        default: return "unknown";                       // not_enrolled, no_network, …: worth asking again
+    }
     const msg = (e instanceof Error ? e.message : String(e ?? "")).toLowerCase();
     if (msg.includes("no ciphertext for this device")) return "wrong-device"; // we're a parallel/new device the sender didn't encrypt to
     if (msg.includes("into the future")) return "hard-gap";                 // > MAX_SKIP_PER_CHAIN
@@ -30,13 +39,40 @@ export function classifyDecryptError(e: unknown): DecryptFailure {
 
 /** Whether a failure can plausibly be repaired by asking the sender to re-encrypt (client-to-client recovery). */
 export function isRecoverable(f: DecryptFailure): boolean {
-    return f === "hard-gap" || f === "no-session" || f === "wrong-device" || f === "unknown"; // corrupt/duplicate never re-request
+    return f === "hard-gap" || f === "no-session" || f === "wrong-device" || f === "unknown"; // corrupt/duplicate/untrusted never re-request
 }
 
 /** Whether the failure means the sender addressed a device that isn't us — it should re-resolve our roster
  * (send a rekey hint), in addition to the message being recovered. */
 export function isWrongDevice(f: DecryptFailure): boolean {
     return f === "wrong-device";
+}
+
+/** Reasons the Android app's library gives for refusing a secret-chat operation (wolp-device-trust spec 002, FR-032). */
+const REFUSALS = ["locked", "no_passport", "bad_passport", "reverify", "multi_device", "no_device", "no_network", "duplicate", "undecryptable", "not_enrolled"] as const;
+export type Refusal = typeof REFUSALS[number];
+
+/** The library's reason carried by a rejected bridge call, or undefined for any other error. */
+export function refusalCode(e: unknown): Refusal | undefined {
+    const code = (e as {code?: unknown} | null)?.code;
+    return typeof code === "string" && (REFUSALS as readonly string[]).includes(code) ? code as Refusal : undefined;
+}
+
+const SEND_REFUSAL_KEY: Partial<Record<Refusal, string>> = {
+    no_device: "chat.peerNoKeys",
+    no_passport: "chat.peerNotInApp",
+    bad_passport: "chat.peerKeyRejected",
+    multi_device: "chat.peerKeyRejected",
+    reverify: "chat.peerReverify",
+    no_network: "chat.keysOffline",
+    not_enrolled: "chat.deviceNotEnrolled",
+};
+
+/** The i18n key of what the user is told when a secret message (or a call) could not be encrypted. */
+export function sendFailureKey(e: unknown): string {
+    if (e instanceof Error && e.message === "NO_PEER_KEYS") return "chat.peerNoKeys";   // the browser implementation
+    const code = refusalCode(e);
+    return (code && SEND_REFUSAL_KEY[code]) ?? "chat.encryptFailed";
 }
 
 // What the user sees for a secret message, as a small closed set — never the guessy raw error.

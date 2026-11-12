@@ -7,6 +7,7 @@ import {setSelectedChatId} from "@/features/chat/model/slices/chatUiSlice.ts";
 import {unencryptedAfterSecret} from "@/features/chat/model/unencrypted.ts";
 import {markSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
 import {SafetyNumberModal} from "@/features/e2ee/ui/SafetyNumberModal.tsx";
+import {KeyChangeLine} from "@/features/e2ee";
 import {useGetPresenceStatusQuery} from "@/features/chat/rest/chatApi.ts";
 import {fmtLastSeen} from "@/features/chat/model/lastSeen.ts";
 import {useWindowedHistory} from "@/features/chat/hooks/useWindowedHistory.ts";
@@ -272,6 +273,10 @@ function ChatWindow({
                     : undefined}
                 onOpenSafety={counterpartId ? () => setSafetyOpen(true) : undefined}
             />
+
+            {secret && counterpartId && (
+                <KeyChangeLine peerUserId={counterpartId} peerName={chat?.name ?? counterpartId} onVerify={() => setSafetyOpen(true)}/>
+            )}
 
             {safetyOpen && counterpartId && myId && (
                 <SafetyNumberModal

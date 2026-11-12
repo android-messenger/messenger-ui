@@ -4,6 +4,6 @@
 // from lib/ or recovery/ (eslint enforces it).
 
 export {isSecretEnvelope} from "./lib/envelope.ts";
-export {classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey, type DecryptFailure, type SecretMsgState} from "./lib/failure.ts";
+export {classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey, sendFailureKey, type DecryptFailure, type SecretMsgState} from "./lib/failure.ts";
 export {buildRekeyHint, makeThrottle, REKEY_COALESCE_MS} from "./lib/rekeyHint.ts";
 export {E2EE_LS, E2EE_DATABASES} from "./lib/stores.ts";

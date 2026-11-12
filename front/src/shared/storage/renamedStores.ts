@@ -6,7 +6,7 @@
 const PREFIX = "wolp";
 
 /** localStorage stores, by the part after "<prefix>.". */
-export const LOCAL_STORES = ["drafts.v1", "secretChats", "e2eeVerified", "sticky-chats.v1", "e2eeWipePending"] as const;
+export const LOCAL_STORES = ["drafts.v1", "secretChats", "e2eeVerified", "sticky-chats.v1", "e2eeWipePending", "e2eeNativeKeys"] as const;
 /** IndexedDB stores, by the part after "<prefix>-". */
 export const DB_STORES = ["names", "pending-call", "push-dedup"] as const;
 

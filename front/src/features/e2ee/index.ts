@@ -7,12 +7,15 @@ export {savePlaintext, loadPlaintext, deletePlaintextForChat, plaintextChatIds, 
 export {formatSafetyNumber} from "./lib/safetyNumber.ts";
 export {cryptoStats, type CryptoStats} from "./lib/cryptoStats.ts";
 export {wipeE2eeData, finishPendingE2eeWipe, removeFromKeyDirectory, ensureE2eeOwner} from "./lib/wipe.ts";
+export {KeyChangeLine} from "./ui/KeyChangeLine.tsx";
 
 import {ensureProvisioned, maybeReplenish, republishCurrentDevice} from "./lib/provisioning.ts";
 import {selfCount} from "./lib/keyDirectory.ts";
 import {SignalStore} from "./lib/signalStore.ts";
 import {sweepExpired, E2EE_PLAINTEXT_TTL_MS} from "./lib/atRest.ts";
 import {logger} from "@/shared/logger/logger.ts";
+import {isNativeApp} from "@/shared/platform.ts";
+import {dropInterfaceKeys} from "./lib/wipe.ts";
 
 // Arm the disappearing-messages sweep: purge locally-stored decrypted plaintext older than the TTL, on
 // app start and then hourly. Best-effort; idempotent. Started once from provisionE2EEInBackground.
@@ -59,6 +62,9 @@ export function provisionE2EEInBackground(): void {
     // re-syncs from the server, secret history does not). Best-effort; a no-op where unsupported/denied.
     try { void navigator.storage?.persist?.(); } catch { /* ignore */ }
     armPlaintextSweep();   // disappearing-messages GC (7-day TTL)
+    // In the Android app the keys are the app's library's: it publishes them and keeps the one-time keys
+    // topped up itself. The interface has nothing to publish — and must get rid of the keys it used to hold.
+    if (isNativeApp()) { void dropInterfaceKeys(); return; }
     void (async () => {
         try {
             const {store, deviceId, provisioned} = await ensureProvisioned();

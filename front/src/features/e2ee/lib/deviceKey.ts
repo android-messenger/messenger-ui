@@ -134,9 +134,12 @@ export function abortVaultWaits(): void {
     setLongWait(false);
 }
 
-/** Runs a native Vault call, repeating it after VAULT_LOCKED until it succeeds, fails otherwise, or the
- * wait is aborted by logout. VAULT_LOCKED never clears E2EE data. */
-async function vaultCall<T>(op: () => Promise<T>): Promise<T> {
+/** What the app's secret-chat operations answer while the phone is locked: the same wait as VAULT_LOCKED. */
+export const E2EE_LOCKED = "locked";
+
+/** Runs a native Vault or secret-chat call, repeating it after VAULT_LOCKED / `locked` until it succeeds,
+ * fails otherwise, or the wait is aborted by logout. A locked phone never clears E2EE data. */
+export async function vaultCall<T>(op: () => Promise<T>): Promise<T> {
     const epoch = waitEpoch;
     let since = 0;
     try {
@@ -144,7 +147,8 @@ async function vaultCall<T>(op: () => Promise<T>): Promise<T> {
             try {
                 return await op();
             } catch (e) {
-                if ((e as {code?: unknown} | null)?.code !== VAULT_LOCKED) throw e;
+                const code = (e as {code?: unknown} | null)?.code;
+                if (code !== VAULT_LOCKED && code !== E2EE_LOCKED) throw e;
                 if (!since) { since = Date.now(); waiting++; }
                 await waitForUnlock();
                 if (epoch !== waitEpoch) throw Object.assign(new Error("vault wait aborted"), {code: VAULT_WAIT_ABORTED});
