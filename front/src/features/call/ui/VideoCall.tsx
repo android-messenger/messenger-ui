@@ -4,7 +4,7 @@ import {useTranslation} from "react-i18next";
 import {skipToken} from "@reduxjs/toolkit/query/react";
 import type {RootState} from "@/store/store.ts";
 import {idsDisplayName, useGetIdsUserQuery} from "@/features/directory";
-import {computeSafetyNumber, isVerified} from "@/features/e2ee";
+import {secretCrypto} from "@/features/e2ee";
 import ConfirmModal from "@/shared/ui/ConfirmModal.jsx";
 import {NO_POSTER} from "@/shared/lib/noPoster.ts";
 import {isNativeApp} from "@/shared/platform.ts";
@@ -69,7 +69,7 @@ export default function VideoCall({
         let alive = true;
         if (!callFrom || !myId) return;
         const key = `${myId}:${callFrom}`;
-        void computeSafetyNumber(myId, callFrom).then((n) => { if (alive) setVerifiedPair(isVerified(callFrom, n) ? key : null); });
+        void secretCrypto.peerState(callFrom).then((s) => { if (alive) setVerifiedPair(s.trust === "verified" ? key : null); });
         return () => { alive = false; };
     }, [callFrom, myId]);
     const peerVerified = pair !== null && verifiedPair === pair;

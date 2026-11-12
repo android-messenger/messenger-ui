@@ -28,7 +28,7 @@ vi.mock("@/features/chat/model/outbox", () => ({
 }));
 
 vi.mock("@/features/e2ee", () => ({
-    encryptForSend: vi.fn(async () => "E2EE1:Y2lwaGVydGV4dA=="),
+    secretCrypto: {encrypt: vi.fn(async () => "E2EE1:Y2lwaGVydGV4dA==")},
     savePlaintext: vi.fn(async () => {}),
     deletePlaintextForChat: vi.fn(async () => {}),
 }));
@@ -192,7 +192,7 @@ describe("chatMessagesService", () => {
 
     it("secret chat, encryption fails: nothing is sent, not even in the clear", async () => {
         const e2ee = await import("@/features/e2ee");
-        vi.mocked(e2ee.encryptForSend).mockRejectedValueOnce(new Error("NO_PEER_KEYS"));
+        vi.mocked(e2ee.secretCrypto.encrypt).mockRejectedValueOnce(new Error("NO_PEER_KEYS"));
         await chatMessagesService.enqueueChatMessage(dispatch, "must stay private too", myId, "chat-secret-fail", "recipient1", undefined, true);
         expect(dispatch).not.toHaveBeenCalled();
     });

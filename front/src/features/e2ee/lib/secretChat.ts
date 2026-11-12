@@ -1,19 +1,16 @@
 import {ensureProvisioned} from "./provisioning.ts";
 import {encryptTo, decryptFrom, type SecretEnvelope} from "./secretSession.ts";
 import {b64, unb64} from "./deviceKey.ts";
+import {MARKER, isSecretEnvelope} from "./envelope.ts";
+
+export {isSecretEnvelope};
 
 // The orchestration seam the message path calls. Wraps the crypto engine with:
 //  - a wire MARKER so the receiver recognizes an E2EE body inside the opaque payload.body,
 //  - a SINGLE-WRITER lock so the Double Ratchet is never advanced from two places at once (two tabs / SW),
 //  - fail-closed semantics: a secret send that can't encrypt THROWS (the caller must not send plaintext).
 
-const MARKER = "E2EE1:";                    // prefix on the wire body; version 1
 const dec = new TextDecoder(), enc = new TextEncoder();
-
-/** True if a received wire body is an E2EE envelope (vs. plaintext). */
-export function isSecretEnvelope(body: string | undefined): boolean {
-    return !!body && body.startsWith(MARKER);
-}
 
 // Single-writer serialization of ratchet access. Prefer the Web Locks API (cross-tab); fall back to an
 // in-process promise chain when it's unavailable (older browsers, tests, SSR).

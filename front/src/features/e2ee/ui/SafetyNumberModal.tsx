@@ -1,14 +1,16 @@
 import {useEffect, useState} from "react";
 import {useTranslation} from "react-i18next";
-import {computeSafetyNumber, formatSafetyNumber, markVerified, clearVerified, isVerified, reconcilePeerIdentities, ensureProvisioned} from "../index.ts";
+import {secretCrypto, formatSafetyNumber} from "../index.ts";
+import {ensureProvisioned} from "../lib/provisioning.ts";
+import {reconcilePeerIdentities} from "../lib/secretSession.ts";
 
 /**
  * Safety-number verification (MITM check). Shows the fingerprint derived from both parties' identity keys;
  * the user compares it out-of-band with the peer and marks them verified. A later key change makes the
  * number differ from the stored one, so verification silently drops until re-checked.
  */
-export function SafetyNumberModal({myUserId, peerUserId, peerName, onClose}: {
-    myUserId: string; peerUserId: string; peerName: string; onClose: () => void;
+export function SafetyNumberModal({peerUserId, peerName, onClose}: {
+    peerUserId: string; peerName: string; onClose: () => void;
 }) {
     const {t} = useTranslation();
     const [num, setNum] = useState<string | null | undefined>(undefined);   // undefined = loading
@@ -24,18 +26,19 @@ export function SafetyNumberModal({myUserId, peerUserId, peerName, onClose}: {
                 const {store} = await ensureProvisioned();
                 await reconcilePeerIdentities(store, peerUserId);
             } catch { /* offline / no keys — fall back to whatever is stored */ }
-            const n = await computeSafetyNumber(myUserId, peerUserId);
+            const n = await secretCrypto.safetyNumber(peerUserId);
+            const state = await secretCrypto.peerState(peerUserId);
             if (!alive) return;
             setNum(n);
-            setVerified(isVerified(peerUserId, n));
+            setVerified(state.trust === "verified");
         })();
         return () => { alive = false; };
-    }, [myUserId, peerUserId]);
+    }, [peerUserId]);
 
     const toggle = () => {
         if (!num) return;
-        if (verified) { clearVerified(peerUserId); setVerified(false); }
-        else { markVerified(peerUserId, num); setVerified(true); }
+        const next = !verified;
+        void secretCrypto.setVerified(peerUserId, next).then(() => setVerified(next), () => { /* no number → stays as it was */ });
     };
 
     return (
