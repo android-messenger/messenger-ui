@@ -12,11 +12,8 @@ import {markSent} from "@/features/chat/model/slices/outboxSlice.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {playNotificationSound} from "@/shared/sound/notify.ts";
 import {showDesktopNotification} from "@/features/notifications";
-import {isSecretEnvelope, decryptReceived} from "@/features/e2ee/lib/secretChat.ts";
-import {savePlaintext, loadPlaintext, E2EE_PLAINTEXT_TTL_MS} from "@/features/e2ee/lib/atRest.ts";
-import {reportUndecryptable} from "@/features/e2ee";
-import {classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey} from "@/features/e2ee/lib/failure.ts";
-import {buildRekeyHint, makeThrottle, REKEY_COALESCE_MS} from "@/features/e2ee/lib/rekeyHint.ts";
+import {secretCrypto, reportUndecryptable, savePlaintext, loadPlaintext, E2EE_PLAINTEXT_TTL_MS} from "@/features/e2ee";
+import {isSecretEnvelope, classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey, buildRekeyHint, makeThrottle, REKEY_COALESCE_MS} from "@/features/e2ee/wire.ts";
 import {ulidTimeMs, isUlid} from "@/shared/ulid/ulid.ts";
 import i18n from "@/shared/i18n";
 import {markSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
@@ -81,7 +78,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                     if (plain == null && !aged && m.from && m.from !== myId) {
                         // Never decrypted live → try the ratchet now (in-order over history).
                         try {
-                            plain = await decryptReceived(m.from, m.text);
+                            plain = await secretCrypto.decrypt(m.from, m.text);
                             void flagIfNotSaved(d, myId, chatId, m.id, savePlaintext(m.id, chatId, plain));
                         }
                         catch (e) {
@@ -168,7 +165,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                         ?? (cid ? await loadPlaintext(cid, E2EE_PLAINTEXT_TTL_MS) : null);
                     if (seen != null) { patch(seen); return; }
                     try {
-                        const plain = await decryptReceived(frame.senderId ?? msg.from, secretBody);
+                        const plain = await secretCrypto.decrypt(frame.senderId ?? msg.from, secretBody);
                         patch(plain);
                         // for reloaded history (by server id); a failed save is shown on the bubble
                         void flagIfNotSaved(dispatch, myId, chatId, msg.id, savePlaintext(msg.id, chatId, plain));

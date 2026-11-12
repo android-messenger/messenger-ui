@@ -1,4 +1,4 @@
-import {isSecretEnvelope} from "@/features/e2ee/lib/secretChat.ts";
+import {isSecretEnvelope} from "@/features/e2ee/wire.ts";
 
 /**
  * Which messages of a chat came in the clear AFTER the chat had become secret. Input is the chat's

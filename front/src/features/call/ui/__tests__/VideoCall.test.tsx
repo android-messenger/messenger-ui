@@ -13,8 +13,7 @@ vi.mock("@/features/directory", () => ({
     idsDisplayName: (u: {id?: string}) => u?.id ?? "",
 }));
 vi.mock("@/features/e2ee", () => ({
-    computeSafetyNumber: vi.fn(async () => null),
-    isVerified: vi.fn(() => false),
+    secretCrypto: {peerState: vi.fn(async () => ({trust: "unverified", keyChanged: false}))},
 }));
 vi.mock("@/shared/ui/ConfirmModal.jsx", () => ({
     default: ({confirmText, cancelText, onConfirm, onCancel}: {confirmText: string; cancelText: string; onConfirm: () => void; onCancel: () => void}) => (

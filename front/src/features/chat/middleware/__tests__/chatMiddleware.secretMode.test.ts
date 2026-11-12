@@ -26,14 +26,11 @@ vi.mock("@/features/chat/model/services/chatMessages.service.ts", () => ({chatMe
 vi.mock("@/shared/sound/notify.ts", () => ({playNotificationSound: vi.fn()}));
 vi.mock("@/features/notifications/desktopNotification.ts", () => ({showDesktopNotification: vi.fn()}));
 vi.mock("@/shared/i18n", () => ({default: {t: (k: string) => k}}));
-vi.mock("@/features/e2ee/lib/secretChat.ts", () => ({
-    isSecretEnvelope: (b?: string) => !!b && b.startsWith("E2EE1:"),
-    decryptReceived: h.decryptReceived,
-}));
-vi.mock("@/features/e2ee/lib/atRest.ts", () => ({
+vi.mock("@/features/e2ee", () => ({
+    secretCrypto: {decrypt: h.decryptReceived},
     savePlaintext: h.savePlaintext, loadPlaintext: h.loadPlaintext, E2EE_PLAINTEXT_TTL_MS: 172_800_000,
+    reportUndecryptable: vi.fn(() => ({type: "e2ee/report"})),
 }));
-vi.mock("@/features/e2ee", () => ({reportUndecryptable: vi.fn(() => ({type: "e2ee/report"}))}));
 
 import {chatMiddleware} from "../chatMiddleware";
 import secretChats from "@/features/chat/model/slices/secretChatsSlice";

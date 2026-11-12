@@ -6,8 +6,8 @@ import {AttachmentImage} from "./AttachmentImage.tsx";
 import {AttachmentAudio} from "./AttachmentAudio.tsx";
 import {AttachmentVideo} from "./AttachmentVideo.tsx";
 import {linkify} from "./messageFormat.tsx";
-import {isSecretEnvelope} from "@/features/e2ee/lib/secretChat.ts";
-import {secretStateKey, type SecretMsgState} from "@/features/e2ee/lib/failure.ts";
+import {isSecretEnvelope} from "@/features/e2ee/wire.ts";
+import {secretStateKey, type SecretMsgState} from "@/features/e2ee/wire.ts";
 import {MessageMenu, type MsgMenuItem} from "./MessageMenu.tsx";
 import {CopyIcon, ForwardIcon, TrashIcon} from "./icons.tsx";
 

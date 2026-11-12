@@ -7,7 +7,7 @@ import {
 import {ATTACHMENT_CACHE_MAX_BYTES} from "@/shared/config/chat.ts";
 import type {OutboxState} from "@/features/chat/model/types";
 import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
-import {isSecretEnvelope} from "@/features/e2ee/lib/secretChat.ts";
+import {isSecretEnvelope} from "@/features/e2ee/wire.ts";
 
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

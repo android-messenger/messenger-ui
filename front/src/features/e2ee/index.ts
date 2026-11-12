@@ -1,13 +1,10 @@
-// Public API of the E2EE feature. Consumers import from here, not the internal lib modules.
-export {ensureProvisioned, maybeReplenish} from "./lib/provisioning.ts";
-export {SignalStore} from "./lib/signalStore.ts";
-export {clearDeviceKey, isVaultWaitLong, onVaultWait} from "./lib/deviceKey.ts";
-export {selfCount, fetchTurnCredentials, type TurnCreds} from "./lib/keyDirectory.ts";
-export {encryptForSend, decryptReceived, isSecretEnvelope} from "./lib/secretChat.ts";
-export {reconcilePeerIdentities} from "./lib/secretSession.ts";
+// Public API of the E2EE feature. Consumers import from here (and the stateless helpers from ./wire.ts),
+// not the internal lib modules. Encryption itself is five operations: `secretCrypto` (./crypto.ts).
+export {fetchTurnCredentials, type TurnCreds} from "./lib/keyDirectory.ts";
+export {secretCrypto, type SecretCrypto, type PeerState, type PeerTrust} from "./crypto.ts";
 export {e2eeRecoveryMiddleware, reportUndecryptable} from "./recovery/e2eeRecoveryMiddleware.ts";
 export {savePlaintext, loadPlaintext, deletePlaintextForChat, plaintextChatIds, sweepExpired, E2EE_PLAINTEXT_TTL_MS} from "./lib/atRest.ts";
-export {computeSafetyNumber, formatSafetyNumber, markVerified, clearVerified, isVerified} from "./lib/safetyNumber.ts";
+export {formatSafetyNumber} from "./lib/safetyNumber.ts";
 export {cryptoStats, type CryptoStats} from "./lib/cryptoStats.ts";
 export {wipeE2eeData, finishPendingE2eeWipe, removeFromKeyDirectory, ensureE2eeOwner} from "./lib/wipe.ts";
 
