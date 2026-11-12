@@ -1,20 +1,26 @@
 import {createSlice, type PayloadAction} from "@reduxjs/toolkit";
 import {E2EE_LS} from "@/features/e2ee/wire.ts";
 
-// Which conversations are in E2EE "secret" mode. A chat becomes secret when the user turns the mode on
-// or when the first encrypted message arrives in it (chatMiddleware), and it never goes back to normal:
-// there is no agreed way to turn the mode off that the server could not forge. Persisted to localStorage;
-// if that is lost, the mark comes back from the encrypted messages in the history.
+// Which conversations are in E2EE "secret" mode. The user turns the mode on and off at will (owner's
+// decision 2026-11-12); a chat also becomes secret when an encrypted message arrives in it
+// (chatMiddleware), so the reply goes encrypted. The mode is turned OFF only by the user's own tap:
+// nothing that comes from the server — a plaintext message included — switches a chat to normal.
+//
+// true — secret; false — the user turned it off (remembered, so the encrypted messages in the history do
+// not turn it back on); absent — never set. Persisted to localStorage; if that is lost, the mark comes
+// back from the encrypted messages in the history.
 
 const KEY = E2EE_LS.secretChats;
 
-export function loadSecretChats(): Record<string, true> {
+export type SecretChats = Record<string, boolean>;
+
+export function loadSecretChats(): SecretChats {
     try {
         const raw = localStorage.getItem(KEY);
-        return raw ? (JSON.parse(raw) as Record<string, true>) : {};
+        return raw ? (JSON.parse(raw) as SecretChats) : {};
     } catch { return {}; }
 }
-export function saveSecretChats(byId: Record<string, true>): void {
+export function saveSecretChats(byId: SecretChats): void {
     // An empty set leaves no key behind: after a logout nothing of the feature stays in localStorage.
     try {
         if (Object.keys(byId).length === 0) localStorage.removeItem(KEY);
@@ -22,20 +28,24 @@ export function saveSecretChats(byId: Record<string, true>): void {
     } catch { /* quota / unavailable */ }
 }
 
-interface SecretState { byId: Record<string, true> }
+interface SecretState { byId: SecretChats }
 const initialState: SecretState = {byId: loadSecretChats()};
 
 const secretChatsSlice = createSlice({
     name: "secretChats",
     initialState,
     reducers: {
-        /** Marks the chat secret. One-way: nothing here removes the mark. */
+        /** The chat is secret from now on: what is sent in it is encrypted. */
         markSecret(state, action: PayloadAction<string>) {
             if (action.payload) state.byId[action.payload] = true;
+        },
+        /** The user turned the secret mode off. Dispatched only from the chat header — never on a server frame. */
+        unmarkSecret(state, action: PayloadAction<string>) {
+            if (action.payload) state.byId[action.payload] = false;
         },
         clearSecretChats(state) { state.byId = {}; },
     },
 });
 
-export const {markSecret, clearSecretChats} = secretChatsSlice.actions;
+export const {markSecret, unmarkSecret, clearSecretChats} = secretChatsSlice.actions;
 export default secretChatsSlice.reducer;

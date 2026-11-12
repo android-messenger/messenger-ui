@@ -55,6 +55,7 @@ function fakeBridge() {
                 gate("resetSession");
                 peer(id).session++;
             },
+            e2eeWipe: vi.fn(async () => { calls.push("wipe"); peers.clear(); }),
         },
     };
 }
@@ -198,6 +199,25 @@ describe("secret chats in the Android app go through the bridge", () => {
         // a second request right away does not reset the session again (a forged request costs one fetch)
         await secretCrypto.encryptRecovery("bob", "chat-1", [{mid: "m3", text: "x"}]);
         expect(bridge.calls.filter((c) => c === "resetSession").length).toBe(1);
+    });
+
+    it("sign-out: the app erases its keys; a failure or a slow app never holds the logout up", async () => {
+        const {removeFromKeyDirectory} = await import("../lib/wipe.ts");
+        bridge.peer("bob").trust = "verified";
+        await removeFromKeyDirectory();
+        expect(bridge.calls).toContain("wipe");
+        expect(bridge.peer("bob").trust).toBe("unverified");   // the mark went with the keys
+
+        bridge.plugin.e2eeWipe.mockRejectedValueOnce(Object.assign(new Error("not implemented"), {code: "UNIMPLEMENTED"}));   // an older app
+        await expect(removeFromKeyDirectory()).resolves.toBeUndefined();
+
+        vi.useFakeTimers();
+        try {
+            bridge.plugin.e2eeWipe.mockImplementationOnce(() => new Promise<void>(() => { /* never answers */ }));
+            const done = removeFromKeyDirectory();
+            await vi.advanceTimersByTimeAsync(6_000);
+            await expect(done).resolves.toBeUndefined();
+        } finally { vi.useRealTimers(); }
     });
 
     it("6.8 — the first start with the bridge erases the interface's own keys and marks, once; texts stay", async () => {

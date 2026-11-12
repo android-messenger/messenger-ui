@@ -17,7 +17,7 @@ import {useCallRingtone} from "@/features/call/hooks/useCallRingtone.ts";
 import {LightboxProvider} from "@/features/chat/ui/Lightbox.tsx";
 import {ForwardModal} from "@/features/chat/ui/ForwardModal.tsx";
 
-const EMPTY_SECRET: Record<string, true> = {};   // stable ref → no re-render churn when there are no secret chats
+const EMPTY_SECRET: Record<string, boolean> = {};   // stable ref → no re-render churn when there are no secret chats
 
 import type {RootState, AppDispatch} from "@/store/store.ts";
 import {outgoingCall, answerViaPush, acceptCall, localEnd, rejectCall} from "@/features/call/model/slices/callSlice";

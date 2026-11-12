@@ -84,8 +84,8 @@ export function ChatHeader({
                     <button onClick={onOpenRoster} title={t("group.members")} aria-label={t("group.members")} className="hover:opacity-80 text-lg p-1">ⓘ</button>
                 )}
 
-                {/* Secret chat: a button to turn it on (key, struck); once on it is a plain mark — the mode
-                    cannot be turned off. Verify (fingerprint) only when on. */}
+                {/* Secret chat: the key turns the mode on (struck key) and off (whole key). Verify
+                    (fingerprint) only when on. */}
                 {!isGroup && !secret && onToggleSecret && (
                     <button
                         onClick={onToggleSecret}
@@ -96,7 +96,12 @@ export function ChatHeader({
                         <KeyIcon width={17} height={17} struck/>
                     </button>
                 )}
-                {!isGroup && secret && (
+                {!isGroup && secret && onToggleSecret && (
+                    <button onClick={onToggleSecret} title={t("chat.secretDisableTitle")} aria-label={t("chat.secretDisableTitle")} className="p-1 hover:opacity-80">
+                        <KeyIcon width={17} height={17} struck={false}/>
+                    </button>
+                )}
+                {!isGroup && secret && !onToggleSecret && (
                     <span className="p-1" role="img" title={t("chat.secretOn")} aria-label={t("chat.secretOn")}>
                         <KeyIcon width={17} height={17} struck={false}/>
                     </span>

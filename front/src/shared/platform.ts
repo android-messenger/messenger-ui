@@ -20,6 +20,8 @@ export interface DeviceTrustPlugin {
     e2eeSafetyNumber(o: { peer: string }): Promise<{ digits?: string }>;
     e2eeSetVerified(o: { peer: string; verified: boolean }): Promise<void>;
     e2eeResetSession(o: { peer: string }): Promise<void>;
+    /** Sign-out: the app erases its keys, sessions and marks and takes its record out of the key directory. */
+    e2eeWipe(): Promise<void>;
 }
 
 /** `Files` plugin (S1 §5.4): the native side downloads `url` (app host only) into a file the user picks. */

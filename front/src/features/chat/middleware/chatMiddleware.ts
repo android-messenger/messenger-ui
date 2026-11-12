@@ -40,10 +40,15 @@ async function flagIfNotSaved(dispatch: AppDispatch, myId: string, chatId: strin
     }));
 }
 
-/** Marks the chat secret if it is not yet (one-way, see secretChatsSlice). */
-function ensureSecretChat(store: {getState: () => unknown; dispatch: (a: never) => unknown}, chatId: string): void {
-    const byId = (store.getState() as {secretChats?: {byId?: Record<string, true>}}).secretChats?.byId;
-    if (chatId && !byId?.[chatId]) store.dispatch(markSecret(chatId) as never);
+/**
+ * Marks the chat secret when an encrypted message is seen in it (see secretChatsSlice). `live` — the
+ * message has just arrived: the peer writes encrypted now, so the mode goes on even if the user had turned
+ * it off. From the history the mode goes on only when this device remembers nothing about the chat: old
+ * encrypted messages must not undo the user's "off".
+ */
+function ensureSecretChat(store: {getState: () => unknown; dispatch: (a: never) => unknown}, chatId: string, live: boolean): void {
+    const mode = (store.getState() as {secretChats?: {byId?: Record<string, boolean>}}).secretChats?.byId?.[chatId];
+    if (chatId && (live ? !mode : mode === undefined)) store.dispatch(markSecret(chatId) as never);
 }
 
 export const chatMiddleware: Middleware = (store) => (next) => (action) => {
@@ -62,9 +67,9 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
         const secret = rows.filter((m) => isSecretEnvelope(m.text));
         if (secret.length) {
             const d = store.dispatch as AppDispatch;
-            // An encrypted message in the history means the chat is secret, whatever this device remembers
+            // An encrypted message in the history means the chat is secret when this device remembers nothing
             // (localStorage cleared, a new install): mark it before the user can send anything in the clear.
-            ensureSecretChat(store, chatId);
+            ensureSecretChat(store, chatId, false);
             void (async () => {
                 const toRecover: Array<{clientId: string; serverId: string}> = [];
                 let peerId = "";
@@ -134,7 +139,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             if (secretBody) {
                 msg.text = i18n.t("chat.decrypting"); msg.secret = true;
                 // The peer writes encrypted → the chat is secret on this side too, so the reply is encrypted.
-                ensureSecretChat(store, chatId);
+                ensureSecretChat(store, chatId, true);
             }
 
             // Append to the open conversation's history (idempotent). No-op if that query has
