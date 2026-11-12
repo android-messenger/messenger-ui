@@ -13,7 +13,7 @@ describe("native push (S1 §6, §7)", () => {
         expect(tapRoute({conversationId: "c1"})).toBe("/?chat=c1");
         expect(tapRoute({call: {conversationId: "c2", callerId: "u9", media: "audio"}})).toBe("/?call=c2&caller=u9&media=audio");
         expect(tapRoute({call: {conversationId: "c2", callerId: "u9"}, conversationId: "c1"})).toBe("/?call=c2&caller=u9");
-        expect(tapRoute({call: {conversationId: "c2", callerId: "u9", media: "video", accept: true}})).toBe("/?call=c2&caller=u9&media=video&accept=1");
+        expect(tapRoute({call: {conversationId: "c2", callerId: "u9", media: "video", accept: true}})).toBe("/?call=c2&caller=u9&media=video");   // `accept` never goes into the address (audit, finding Б)
         expect(tapRoute({})).toBeNull();
     });
 

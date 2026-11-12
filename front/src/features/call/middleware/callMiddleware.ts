@@ -81,7 +81,7 @@ export const createCallMiddleware = (webRTCService: WebRTCService): Middleware =
                         }
                         // Android app (S1 §7.3): already accepted on the native incoming-call screen → answer
                         // the caller's re-sent offer right away instead of asking a second time.
-                        const autoAccept = cs.autoAcceptFrom === msg.from;
+                        const autoAccept = cs.autoAcceptFrom === msg.from && Date.now() < (cs.autoAcceptUntil ?? 0);
                         dispatch(incomingOffer(offer));
                         if (autoAccept) {
                             dispatch(acceptCall());

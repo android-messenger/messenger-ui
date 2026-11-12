@@ -27,12 +27,15 @@ export const browserCrypto: SecretCrypto = {
 
     safetyNumber: (peerUserId) => numberWith(peerUserId),
 
-    async setVerified(peerUserId, verified) {
+    async setVerified(peerUserId, verified, shownNumber) {
         if (!verified) { clearVerified(peerUserId); return; }
         const n = await numberWith(peerUserId);
         if (!n) throw new Error("e2ee: no safety number to verify");
+        if (n.replace(/\D/g, "") !== shownNumber.replace(/\D/g, "")) throw new Error("e2ee: the key is not the one whose number was shown");
         markVerified(peerUserId, n);
     },
+
+    async keyChangeSeen() { /* a browser keeps no such mark */ },
 
     async resetSession(peerUserId) {
         const {store} = await ensureProvisioned();

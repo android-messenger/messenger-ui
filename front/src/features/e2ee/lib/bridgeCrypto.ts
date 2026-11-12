@@ -2,7 +2,7 @@ import type {PeerState, RecoverCipher, SecretCrypto} from "../crypto.ts";
 import {deviceTrust} from "@/shared/platform.ts";
 import {vaultCall} from "./deviceKey.ts";
 import {refusalCode} from "./failure.ts";
-import {noteKeyChanged} from "./keyChange.ts";
+import {dismissKeyChanged, noteKeyChanged} from "./keyChange.ts";
 import {makeThrottle, REKEY_COALESCE_MS} from "./rekeyHint.ts";
 
 // The Android app's implementation of the encryption module (spec 001, story 6): every operation is a call
@@ -15,10 +15,11 @@ import {makeThrottle, REKEY_COALESCE_MS} from "./rekeyHint.ts";
 /** At most one session reset per peer per window: a forged recovery request costs one directory fetch. */
 const resetThrottle = makeThrottle(REKEY_COALESCE_MS);
 
-/** The library keeps "the key changed" until the state is read once: read it and keep it for the chat. */
+/** The library keeps "the key changed" until the user closes the notice; the chat shows what it says. */
 async function readState(peer: string): Promise<PeerState> {
     const s = await vaultCall(() => deviceTrust().e2eePeerState({peer}));
     if (s.keyChanged || s.trust === "reverify") noteKeyChanged(peer);
+    else dismissKeyChanged(peer);
     return {trust: s.trust, keyChanged: s.keyChanged};
 }
 function watchKey(peer: string): void { void readState(peer).catch(() => { /* shown with the next message */ }); }
@@ -56,8 +57,19 @@ export const bridgeCrypto: SecretCrypto = {
         return digits ?? null;
     },
 
-    async setVerified(peer, verified) {
-        await vaultCall(() => deviceTrust().e2eeSetVerified({peer, verified}));
+    async setVerified(peer, verified, shownNumber) {
+        try {
+            await vaultCall(() => deviceTrust().e2eeSetVerified({peer, verified, digits: shownNumber}));
+        } catch (e) {
+            if (refusalCode(e) === "reverify") noteKeyChanged(peer);
+            throw e;
+        }
+        watchKey(peer);
+    },
+
+    async keyChangeSeen(peer) {
+        await vaultCall(() => deviceTrust().e2eeKeyChangeSeen({peer}));
+        watchKey(peer);   // a peer still to be verified again keeps its line
     },
 
     async resetSession(peer) {

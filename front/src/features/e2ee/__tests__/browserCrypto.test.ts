@@ -38,7 +38,7 @@ describe("secretCrypto (browser implementation)", () => {
 
     it("a peer is verified only after setVerified, and until the number changes", async () => {
         expect(await secretCrypto.peerState("bob")).toEqual({trust: "unverified", keyChanged: false});
-        await secretCrypto.setVerified("bob", true);
+        await secretCrypto.setVerified("bob", true, "me|bob");
         expect((await secretCrypto.peerState("bob")).trust).toBe("verified");
         expect((await secretCrypto.peerState("carol")).trust).toBe("unverified");
 
@@ -47,14 +47,14 @@ describe("secretCrypto (browser implementation)", () => {
     });
 
     it("setVerified(false) takes the mark off", async () => {
-        await secretCrypto.setVerified("bob", true);
-        await secretCrypto.setVerified("bob", false);
+        await secretCrypto.setVerified("bob", true, "me|bob");
+        await secretCrypto.setVerified("bob", false, "me|bob");
         expect((await secretCrypto.peerState("bob")).trust).toBe("unverified");
     });
 
     it("a peer whose key is not known cannot be marked verified", async () => {
         h.computeSafetyNumber.mockImplementation(async () => null);
-        await expect(secretCrypto.setVerified("bob", true)).rejects.toThrow();
+        await expect(secretCrypto.setVerified("bob", true, "me|bob")).rejects.toThrow();
         expect((await secretCrypto.peerState("bob")).trust).toBe("unverified");
     });
 });

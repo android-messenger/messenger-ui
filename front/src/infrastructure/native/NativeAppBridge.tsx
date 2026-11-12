@@ -15,6 +15,7 @@ import {isNotLogged} from "@/shared/utils/checks.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {setAppBackgrounded} from "./appLifecycle.ts";
 import {tapRoute} from "./tapRoute.ts";
+import {noteNativeAccept} from "@/features/call/model/nativeAccept.ts";
 import {useNativeCall} from "./useNativeCall.ts";
 
 export default function NativeAppBridge() {
@@ -39,6 +40,8 @@ export default function NativeAppBridge() {
             dispatch({type: "ws/connect", payload: {url: messengerWsUrl()}, meta: {shouldReconnect: true}});
         }));
         handles.push(p.addListener("notificationTap", (d) => {
+            // S1 §7.3: already accepted on the native screen — remembered here, not in the address
+            if (d.call?.accept && d.call.callerId && d.call.conversationId) noteNativeAccept(d.call.callerId, d.call.conversationId);
             const route = tapRoute(d);
             if (route) navigate(route);
         }));

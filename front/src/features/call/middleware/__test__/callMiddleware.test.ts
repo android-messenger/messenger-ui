@@ -98,7 +98,7 @@ describe("callMiddleware", () => {
     });
 
     it("ws/incoming: call:offer от того, кого уже приняли на нативном экране (S1 §7.3) → сразу acceptCall", () => {
-        store.getState = vi.fn(() => ({ call: { status: "idle", peerId: null, incomingOfferData: null, autoAcceptFrom: "peer1" } }));
+        store.getState = vi.fn(() => ({ call: { status: "idle", peerId: null, incomingOfferData: null, autoAcceptFrom: "peer1", autoAcceptUntil: Date.now() + 10_000 } }));
         const msg: IncomingWebRTCMessage = { type: "call:offer", from: "peer1", sdp: "ENC", conversationId: "c9" };
         middleware(store)(next)({ type: "ws/incoming", payload: msg });
         expect(store.dispatch).toHaveBeenCalledWith(incomingOffer({ from: "peer1", sdp: "ENC", media: undefined, conversationId: "c9" }));
@@ -106,8 +106,15 @@ describe("callMiddleware", () => {
         expect(showCallNotification).not.toHaveBeenCalled();
     });
 
+    it("ws/incoming: call:offer от принятого на нативном экране, но срок ответа вышел — обычный звонок, с диалогом", () => {
+        store.getState = vi.fn(() => ({ call: { status: "idle", peerId: null, incomingOfferData: null, autoAcceptFrom: "peer1", autoAcceptUntil: Date.now() - 1 } }));
+        const msg: IncomingWebRTCMessage = { type: "call:offer", from: "peer1", sdp: "ENC", conversationId: "c9" };
+        middleware(store)(next)({ type: "ws/incoming", payload: msg });
+        expect(store.dispatch).not.toHaveBeenCalledWith(acceptCall());
+    });
+
     it("ws/incoming: call:offer от другого пира при autoAcceptFrom — обычный звонок, без автопринятия", () => {
-        store.getState = vi.fn(() => ({ call: { status: "idle", peerId: null, incomingOfferData: null, autoAcceptFrom: "peer1" } }));
+        store.getState = vi.fn(() => ({ call: { status: "idle", peerId: null, incomingOfferData: null, autoAcceptFrom: "peer1", autoAcceptUntil: Date.now() + 10_000 } }));
         const msg: IncomingWebRTCMessage = { type: "call:offer", from: "peer2", sdp: "ENC" };
         middleware(store)(next)({ type: "ws/incoming", payload: msg });
         expect(store.dispatch).not.toHaveBeenCalledWith(acceptCall());

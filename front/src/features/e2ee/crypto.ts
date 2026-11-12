@@ -16,8 +16,8 @@ export type PeerTrust = "unverified" | "passport" | "verified" | "reverify";
 
 export interface PeerState {
     trust: PeerTrust;
-    /** The peer's key changed since the user last looked. The browser implementation never sets it: there a
-     *  key change just drops the "verified" mark. */
+    /** The peer's key changed and the user has not closed the notice yet (keyChangeSeen) nor compared the
+     *  number again. The browser implementation never sets it: there a key change just drops the "verified" mark. */
     keyChanged: boolean;
 }
 
@@ -32,8 +32,12 @@ export interface SecretCrypto {
     peerState(peerUserId: string): Promise<PeerState>;
     /** Digits to compare out of band, or null while the peer's key is not known. */
     safetyNumber(peerUserId: string): Promise<string | null>;
-    /** Mark the peer as compared by safety number, or take the mark off. */
-    setVerified(peerUserId: string, verified: boolean): Promise<void>;
+    /** Mark the peer as compared by safety number, or take the mark off. `shownNumber` — the digits that were
+     *  on the screen: the mark goes to that key only, and THROWS (`reverify` in the app) when the peer's key
+     *  is another one by now. */
+    setVerified(peerUserId: string, verified: boolean, shownNumber: string): Promise<void>;
+    /** The user closed the "key changed" notice. */
+    keyChangeSeen(peerUserId: string): Promise<void>;
     /** Message recovery: the next encrypt takes the peer's keys from the directory again. */
     resetSession(peerUserId: string): Promise<void>;
     /** Re-encrypt own stored messages the peer could not read, each bound to its id and chat. */

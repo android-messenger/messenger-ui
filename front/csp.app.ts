@@ -9,6 +9,8 @@
 //   - connect-src names the API origin, its WebSocket form and the attachments host (presigned URLs
 //     live on the same hostname, default port): the UI is on its own local origin, so 'self' covers
 //     only the packaged assets;
+//   - img-src and media-src name the attachments host too: the full-size photo and the video are shown
+//     straight from their presigned URL (a video is streamed, it is not downloaded whole into a blob);
 //   - no inline script exists in this build (no service-worker registration), so script-src carries
 //     no hash; frame-ancestors is dropped because a <meta> policy cannot express it.
 
@@ -23,13 +25,20 @@ export function appConnectSources(apiOrigin: string): string[] {
     return [...new Set([u.origin, ws, attachments])];
 }
 
+/** Where presigned attachment URLs live: the API hostname on the default port. */
+export function appAttachmentsSource(apiOrigin: string): string {
+    const u = new URL(apiOrigin);
+    return `${u.protocol}//${u.hostname}`;
+}
+
 export function appCsp(apiOrigin: string): string {
+    const attachments = appAttachmentsSource(apiOrigin);
     return [
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval'",
         "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data: blob:",
-        "media-src 'self' blob:",
+        `img-src 'self' data: blob: ${attachments}`,
+        `media-src 'self' blob: ${attachments}`,
         "font-src 'self' data:",
         `connect-src 'self' ${appConnectSources(apiOrigin).join(" ")}`,
         "worker-src 'self'",

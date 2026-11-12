@@ -42,7 +42,17 @@ export function SafetyNumberModal({peerUserId, peerName, onClose}: {
         if (!num) return;
         const next = !verified;
         // Verifying again — or taking the mark off — is also what lets messages go out after a key change.
-        void secretCrypto.setVerified(peerUserId, next).then(() => { setVerified(next); dismissKeyChanged(peerUserId); }, () => { /* no number → stays as it was */ });
+        // The mark goes to the key whose number is on the screen (`num`). If the key changed while the dialog
+        // was open, the call is refused: show the new number, not verified — the user compares again.
+        void secretCrypto.setVerified(peerUserId, next, num).then(
+            () => { setVerified(next); dismissKeyChanged(peerUserId); },
+            async () => {
+                const n = await secretCrypto.safetyNumber(peerUserId).catch(() => null);
+                const state = await secretCrypto.peerState(peerUserId).catch(() => null);
+                if (n) setNum(n);
+                setVerified(state?.trust === "verified");
+            },
+        );
     };
 
     return (

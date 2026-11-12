@@ -22,6 +22,7 @@ const EMPTY_SECRET: Record<string, boolean> = {};   // stable ref → no re-rend
 import type {RootState, AppDispatch} from "@/store/store.ts";
 import {outgoingCall, answerViaPush, acceptCall, localEnd, rejectCall} from "@/features/call/model/slices/callSlice";
 import {parseCallDeepLink} from "@/features/call/model/callDeepLink.ts";
+import {takeNativeAccept} from "@/features/call/model/nativeAccept.ts";
 import {readPendingCall, clearPendingCall} from "@/features/call/model/pendingCall.ts";
 import {CALL_TIMEOUT_MS} from "@/shared/config/webrtc";
 import {useWebRTC} from "@/features/call/hooks/useWebRTC.ts";
@@ -82,7 +83,7 @@ export default function Messenger() {
         // Answer flow: tell the still-ringing caller "I'm here" so they re-send the offer and we show a
         // real INCOMING dialog. conversationId comes from the push (survives a cold start before getChats
         // loads). Falls back to a glare callback if no offer arrives (see callMiddleware answerViaPush).
-        dispatch(answerViaPush({peerId: link.peerId, conversationId: link.conversationId, media: link.media, autoAccept: link.autoAccept}));
+        dispatch(answerViaPush({peerId: link.peerId, conversationId: link.conversationId, media: link.media, autoAccept: takeNativeAccept(link.peerId, link.conversationId)}));
         void clearPendingCall();   // the deep-link handled it — don't let the boot check re-fire
         const next = new URLSearchParams(searchParams);
         next.delete("call");

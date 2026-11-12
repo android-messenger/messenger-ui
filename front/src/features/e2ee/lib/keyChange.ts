@@ -1,6 +1,7 @@
-// Peers whose key changed and whose user has not been told yet (spec 001, FR-054). Kept in memory: the
-// app's library holds the mark durably and hands it over once, when the peer's state is read; from then
-// on it lives here until the user dismisses the line in the chat.
+// Peers whose key changed and whose user has not closed the notice yet (spec 001, FR-054). A mirror, in
+// memory, of what the app's library keeps durably: the library holds the mark until the user closes the
+// line in the chat or compares the safety number again (audit 2026-11-12, finding 2: the mark used to be
+// taken off by the first read, and a reload before the chat was opened lost it).
 
 const changed = new Set<string>();
 const listeners = new Set<() => void>();

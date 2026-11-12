@@ -11,6 +11,13 @@ describe("the packaged UI's Content-Security-Policy", () => {
         expect(appConnectSources("https://app.example.org")).toEqual(["https://app.example.org", "wss://app.example.org"]);
     });
 
+    // Audit 2026-11-12, finding 4 (В): the full-size photo and the video are shown from their presigned URL.
+    it("lets images and video come from the attachments host, and from nowhere else outside the package", () => {
+        const csp = appCsp("https://m.example.org:8443").split("; ");
+        expect(csp).toContain("img-src 'self' data: blob: https://m.example.org");
+        expect(csp).toContain("media-src 'self' blob: https://m.example.org");
+    });
+
     it("refuses a plain-http API origin, except the local stand", () => {
         expect(() => appConnectSources("http://m.example.org")).toThrow();
         expect(appConnectSources("http://localhost:9444")).toContain("ws://localhost:9444");

@@ -35,6 +35,8 @@ describe("native calls (S1 §4.5, §5.3, §7.3)", () => {
     it("autoAcceptFrom: set by an accepted push answer, cleared by the offer and by any end", () => {
         let s = callReducer(undefined, answerViaPush({peerId: "u2", conversationId: "c1", autoAccept: true}));
         expect(s.autoAcceptFrom).toBe("u2");
+        expect(s.autoAcceptUntil).toBeGreaterThan(Date.now());   // …and only for a while
+        expect(callReducer(s, incomingOffer({from: "u2", sdp: "x"} as never)).autoAcceptUntil).toBeNull();
         expect(callReducer(s, incomingOffer({from: "u2", sdp: "x"} as never)).autoAcceptFrom).toBeNull();
         expect(callReducer(s, localEnd()).autoAcceptFrom).toBeNull();
         s = callReducer(undefined, answerViaPush({peerId: "u2", conversationId: "c1"}));
