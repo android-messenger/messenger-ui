@@ -17,7 +17,7 @@ type ComposerSummary = {counterpartId: string; orderId?: string} | null | undefi
  * notifier. Behavior preserved verbatim, including the no-summary guard that surfaces an error toast
  * instead of failing silently.
  */
-const EMPTY_SECRET: Record<string, true> = {};   // stable ref → no re-render churn when there are no secret chats
+const EMPTY_SECRET: Record<string, boolean> = {};   // stable ref → no re-render churn when there are no secret chats
 
 export function useMessageComposer(params: {
     selectedChatId: string | null;

@@ -101,7 +101,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
         const cur = store.getState().secretChats.byId;
         if (cur !== lastSecret) {
             // A chat that just became secret must not keep a draft in localStorage.
-            dropPersistedDrafts(Object.keys(cur).filter((id) => !lastSecret[id]));
+            dropPersistedDrafts(Object.keys(cur).filter((id) => cur[id] && !lastSecret[id]));
             lastSecret = cur;
             saveSecretChats(cur);
         }

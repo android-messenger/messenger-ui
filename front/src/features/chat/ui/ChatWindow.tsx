@@ -5,7 +5,7 @@ import type {AppDispatch, RootState} from "@/store/store";
 import type {Contact} from "@/entities/contact";
 import {setSelectedChatId} from "@/features/chat/model/slices/chatUiSlice.ts";
 import {unencryptedAfterSecret} from "@/features/chat/model/unencrypted.ts";
-import {markSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
+import {markSecret, unmarkSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
 import {SafetyNumberModal} from "@/features/e2ee/ui/SafetyNumberModal.tsx";
 import {KeyChangeLine} from "@/features/e2ee";
 import {useGetPresenceStatusQuery} from "@/features/chat/rest/chatApi.ts";
@@ -267,9 +267,13 @@ function ChatWindow({
                 onToggleBlock={onToggleBlock}
                 onDeleteChat={onDeleteChat}
                 secret={secret}
-                // One-way: a secret chat cannot be turned back to normal, so the user confirms once.
-                onToggleSecret={!isGroup && selectedChatId && !secret
-                    ? () => { if (window.confirm(t("chat.secretEnableConfirm"))) dispatch(markSecret(selectedChatId)); }
+                // The user switches the mode both ways at will; each switch is confirmed, so a slip of the
+                // finger does not send the next message in the clear.
+                onToggleSecret={!isGroup && selectedChatId
+                    ? () => {
+                        if (secret) { if (window.confirm(t("chat.secretDisableConfirm"))) dispatch(unmarkSecret(selectedChatId)); }
+                        else if (window.confirm(t("chat.secretEnableConfirm"))) dispatch(markSecret(selectedChatId));
+                    }
                     : undefined}
                 onOpenSafety={counterpartId ? () => setSafetyOpen(true) : undefined}
             />

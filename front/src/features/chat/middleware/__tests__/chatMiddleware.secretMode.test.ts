@@ -1,8 +1,9 @@
 import {describe, it, expect, vi, beforeEach} from "vitest";
 import {configureStore} from "@reduxjs/toolkit";
 
-// Spec 001, story 4: the secret mode is the same on both sides. The first encrypted message — live or in
-// the history — marks the chat secret on the receiving device, so its reply goes out encrypted.
+// Spec 001, story 4: an encrypted message — live, or in the history of a device that remembers nothing —
+// marks the chat secret on the receiving device, so its reply goes out encrypted. Nothing from the server
+// turns the mode off; the user does, at will.
 
 const h = vi.hoisted(() => ({
     decryptReceived: vi.fn(async () => "hello"),
@@ -33,7 +34,7 @@ vi.mock("@/features/e2ee", () => ({
 }));
 
 import {chatMiddleware} from "../chatMiddleware";
-import secretChats from "@/features/chat/model/slices/secretChatsSlice";
+import secretChats, {unmarkSecret} from "@/features/chat/model/slices/secretChatsSlice";
 
 function makeStore() {
     return configureStore({
@@ -89,6 +90,29 @@ describe("secret mode follows the encrypted messages", () => {
             payload: [{id: "1", from: "peer", text: "old clear text"}, {id: "2", from: "peer", text: "E2EE1:opaque"}],
         });
         expect(isSecret(store, "c7")).toBe(true);
+    });
+
+    // Owner's decision 2026-11-12: the user turns the mode off at will. Only the user does.
+    it("old encrypted messages in the history do not undo the user's 'off'", () => {
+        const store = makeStore();
+        store.dispatch(incoming("E2EE1:opaque"));
+        store.dispatch(unmarkSecret("c1"));
+        store.dispatch({
+            type: "test/historyFulfilled",
+            meta: {arg: {originalArgs: {myId: "me", chatId: "c1"}}},
+            payload: [{id: "2", from: "peer", text: "E2EE1:opaque"}],
+        });
+        expect(isSecret(store, "c1")).toBe(false);
+    });
+
+    it("after the user's 'off' a clear message leaves the chat ordinary, a new encrypted one turns the mode on again", () => {
+        const store = makeStore();
+        store.dispatch(incoming("E2EE1:opaque"));
+        store.dispatch(unmarkSecret("c1"));
+        store.dispatch(incoming("plain text"));
+        expect(isSecret(store, "c1")).toBe(false);
+        store.dispatch(incoming("E2EE2:3.opaque"));   // the peer writes encrypted now: the reply must be too
+        expect(isSecret(store, "c1")).toBe(true);
     });
 
     it("a history without encrypted messages leaves the chat ordinary", () => {

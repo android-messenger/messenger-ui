@@ -3,7 +3,7 @@ import {SignalStore} from "./signalStore.ts";
 import {forgetDeviceKey, abortVaultWaits} from "./deviceKey.ts";
 import {deleteSelf} from "./keyDirectory.ts";
 import {logger} from "@/shared/logger/logger.ts";
-import {isNativeApp} from "@/shared/platform.ts";
+import {deviceTrust, isNativeApp} from "@/shared/platform.ts";
 import {forgetKeyChanges} from "./keyChange.ts";
 import {E2EE_LS} from "./stores.ts";
 
@@ -64,16 +64,30 @@ export async function finishPendingE2eeWipe(): Promise<boolean> {
 }
 
 const DIRECTORY_TIMEOUT_MS = 4_000;
+/** The app waits up to 4 s for the key directory itself; a logout never hangs on it. */
+const NATIVE_WIPE_TIMEOUT_MS = 6_000;
 
 /**
- * Remove this device's record from the key directory, so a peer gets "the recipient has no keys"
+ * Sign-out, the part that needs the session. In the Android app: the app erases its keys and its record.
+ * In a browser: remove this device's record from the key directory, so a peer gets "the recipient has no keys"
  * instead of encrypting to a key that is about to be erased. Call while the session is still valid and
  * BEFORE wipeE2eeData (the device id is read from the store). Best-effort: no record, 409 (a browser
  * asking to delete the phone's record), 401, an unreachable directory or a slow one never stop a logout.
  */
 export async function removeFromKeyDirectory(): Promise<void> {
-    // In the Android app the record belongs to the app's library, which keeps it while the device is enrolled.
-    if (isNativeApp()) return;
+    // In the Android app the keys and the record are the app's library's: it erases the keys, sessions and
+    // marks and removes the record itself (owner's decision: the keys are erased on every sign-out).
+    if (isNativeApp()) {
+        try {
+            await Promise.race([
+                deviceTrust().e2eeWipe(),
+                new Promise<void>((resolve) => setTimeout(resolve, NATIVE_WIPE_TIMEOUT_MS)),
+            ]);
+        } catch (e) {
+            logger.warn("e2ee: the app did not erase its keys on logout", e as Error);
+        }
+        return;
+    }
     try {
         // The device id is stored in the clear; a device that never provisioned has nothing to remove.
         const deviceId = await new SignalStore().getDeviceId();
