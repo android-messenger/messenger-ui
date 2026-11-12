@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Full-height app that doesn't rubber-band or leak the body background on iOS/iPad.
+   The app roots use dvh (dynamic viewport); pin the document and kill page scroll so
+   the top isn't clipped and there's no stray gray strip below the input. */
+html, body, #root {
+    height: 100%;
+}
+body {
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    background: #d1d5db; /* gray-300 — matches the app so any hairline gap isn't visible */
+}
+
+
+
+/* System-bar insets (Android app, S1 §4.4 / S1-5). The page is edge-to-edge there (viewport-fit=cover):
+   Capacitor's SystemBars sets --safe-area-inset-* on older WebViews, env() works on newer ones.
+   In a browser every value is 0, so nothing below changes the browser layout. */
+:root {
+    --wolp-sat: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+    --wolp-sar: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+    --wolp-sab: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+    --wolp-sal: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+}
+/* App shell: content stays clear of the status and navigation bars; the strip under the status bar
+   takes the header colour, the one above the navigation bar the composer's. */
+.safe-area-shell {
+    padding: var(--wolp-sat) var(--wolp-sar) var(--wolp-sab) var(--wolp-sal);
+    background:
+        linear-gradient(to bottom, var(--color-teal-950, #042f2e) 0 var(--wolp-sat), transparent var(--wolp-sat)),
+        linear-gradient(to top, #fff 0 var(--wolp-sab), #d1d5db var(--wolp-sab));
+}
+/* Full-screen layers (call, recorder, lightbox, modals): keep their controls clear of the bars. */
+.safe-area-pad {
+    padding: var(--wolp-sat) var(--wolp-sar) var(--wolp-sab) var(--wolp-sal);
+}
+.safe-area-pad-4 {
+    padding: calc(1rem + var(--wolp-sat)) calc(1rem + var(--wolp-sar)) calc(1rem + var(--wolp-sab)) calc(1rem + var(--wolp-sal));
+}

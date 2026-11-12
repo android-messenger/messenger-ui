@@ -1,0 +1,44 @@
+# Checks for the web client (front/). Runs on every pull request and on every commit in main.
+# Third-party actions are pinned by commit.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  front:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+      - run: npm ci
+
+      # lint, typecheck, tests, web build
+      - run: npm run ci
+        env:
+          VITE_TURN_HOST: turn.example.test
+          VITE_TURN_PORT: "3478"
+
+      # the build packaged into the Android app
+      - run: npm run build:app
+        env:
+          VITE_API_ORIGIN: https://app.example.test
+          VITE_TURN_HOST: turn.example.test
+          VITE_TURN_PORT: "3478"

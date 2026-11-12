@@ -1,0 +1,4 @@
+
+# stray portable Node installs (dev tooling, never commit)
+node-v*-linux-*/
+node-v*-darwin-*/
