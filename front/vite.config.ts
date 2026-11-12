@@ -5,6 +5,8 @@ import path from "path";
 import { visualizer } from "rollup-plugin-visualizer";
 import { VitePWA } from "vite-plugin-pwa";
 import pkg from "./package.json" with { type: "json" };
+import { readFileSync } from "node:fs";
+import { appCsp, CSP_META, withCspMeta } from "./csp.app";
 
 
 // `--mode app`: the build packaged into the Android APK (docs security/09-ui-in-apk.md). The UI then
@@ -13,13 +15,15 @@ import pkg from "./package.json" with { type: "json" };
 export default defineConfig(({mode, command}) => {
   const app = mode === "app";
   const env = loadEnv(mode, process.cwd(), "VITE_");
-  if (app && !env.VITE_API_ORIGIN) {
+  const apiOrigin = env.VITE_API_ORIGIN;
+  if (app && !apiOrigin) {
     throw new Error("--mode app needs VITE_API_ORIGIN=https://app.<host>[:port]");
   }
   // The STUN/TURN server has no default in the code: a build must name the server of its own stack.
   if (command === "build" && (!env.VITE_TURN_HOST || !env.VITE_TURN_PORT)) {
     throw new Error("the build needs VITE_TURN_HOST and VITE_TURN_PORT (the STUN/TURN server of this stack)");
   }
+  let outDir = "dist-app";
   return {
   base: app ? "/" : undefined,
   // Build-time constants surfaced in the app (the diagnostics/info page shows them).
@@ -78,6 +82,18 @@ export default defineConfig(({mode, command}) => {
           clientsClaim: true,
         },
       }),
+      // The packaged UI carries its Content-Security-Policy inside index.html (csp.app.ts). The build
+      // fails if the finished index.html ends up without it.
+      app && {
+        name: "wolp-app-csp",
+        configResolved(c: { build: { outDir: string }; root: string }) { outDir = path.resolve(c.root, c.build.outDir); },
+        transformIndexHtml: { order: "post" as const, handler: (html: string) => withCspMeta(html, appCsp(apiOrigin)) },
+        closeBundle() {
+          if (!CSP_META.test(readFileSync(path.join(outDir, "index.html"), "utf8"))) {
+            throw new Error("app build: index.html has no Content-Security-Policy meta");
+          }
+        },
+      },
       !app && visualizer({
         open: true,
         gzipSize: true,
