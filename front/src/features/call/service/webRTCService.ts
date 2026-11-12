@@ -6,7 +6,7 @@ import type {
     OutgoingWebRTCMessage
 } from "@/features/call/model/types.ts";
 import {logger} from "@/shared/logger/logger.ts";
-import {encryptForSend, decryptReceived} from "@/features/e2ee";
+import {secretCrypto} from "@/features/e2ee";
 import toast from "react-hot-toast";
 import i18n from "@/shared/i18n";
 
@@ -206,7 +206,7 @@ export class WebRTCService {
         await (this.pc as RTCPeerConnection).setLocalDescription(offer);
 
         let sdp: string;
-        try { sdp = await encryptForSend(peerId, JSON.stringify(offer)); }   // E2EE-authenticate the SDP/fingerprint
+        try { sdp = await secretCrypto.encrypt(peerId, JSON.stringify(offer)); }   // E2EE-authenticate the SDP/fingerprint
         catch (err) { this.e2eeFail(err); throw err; }
 
         this.send({
@@ -231,7 +231,7 @@ export class WebRTCService {
         const offer = await this.pc.createOffer({iceRestart: true});
         await this.pc.setLocalDescription(offer);
         let sdp: string;
-        try { sdp = await encryptForSend(this.remotePeerId, JSON.stringify(offer)); }
+        try { sdp = await secretCrypto.encrypt(this.remotePeerId, JSON.stringify(offer)); }
         catch (err) { this.e2eeFail(err); return false; }
         this.send({
             type: "call:offer",
@@ -273,7 +273,7 @@ export class WebRTCService {
         const gen = this.generation;
         let offer: RTCSessionDescriptionInit;
         try {
-            offer = JSON.parse(await decryptReceived(from, sdp)) as RTCSessionDescriptionInit;
+            offer = JSON.parse(await secretCrypto.decrypt(from, sdp)) as RTCSessionDescriptionInit;
         } catch (err) {
             if (gen !== this.generation) return;
             logger.warn("call: undecryptable offer — rejecting", err as Error);
@@ -309,7 +309,7 @@ export class WebRTCService {
             const answer = await (this.pc as RTCPeerConnection).createAnswer();
             await (this.pc as RTCPeerConnection).setLocalDescription(answer);
 
-            const sdpA = await encryptForSend(from, JSON.stringify(answer));   // E2EE-authenticate our answer SDP
+            const sdpA = await secretCrypto.encrypt(from, JSON.stringify(answer));   // E2EE-authenticate our answer SDP
             this.send({
                 type: "call:answer",
                 to: from,
@@ -335,7 +335,7 @@ export class WebRTCService {
         const gen = this.generation;
         let answer: RTCSessionDescriptionInit;
         try {
-            answer = JSON.parse(await decryptReceived(from, sdp)) as RTCSessionDescriptionInit;
+            answer = JSON.parse(await secretCrypto.decrypt(from, sdp)) as RTCSessionDescriptionInit;
         } catch (err) {
             if (gen !== this.generation) return;
             logger.warn("call: undecryptable answer — ending", err as Error);

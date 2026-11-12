@@ -1,5 +1,5 @@
 import {logger} from "@/shared/logger/logger.ts";
-import {E2EE_DATABASES} from "@/features/e2ee/lib/stores.ts";
+import {E2EE_DATABASES} from "@/features/e2ee/wire.ts";
 
 // PANIC WIPE — the "erase everything on this device" action. Removes ALL client-side state this app ever
 // wrote: every IndexedDB database (including the device/MASTER key, the Signal identity, sealed secret

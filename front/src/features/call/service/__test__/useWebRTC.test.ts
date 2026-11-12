@@ -15,13 +15,15 @@ vi.mock("react-hot-toast", () => ({
 // E2EE signaling: the service encrypts every SDP before sending and decrypts on receive. Mock with a
 // reversible marker so we can assert the wire carries CIPHERTEXT (never a plaintext SDP) and round-trips.
 vi.mock("@/features/e2ee", () => ({
-    encryptForSend: vi.fn(async (_peer: string, text: string) => "ENC:" + text),
-    decryptReceived: vi.fn(async (_from: string, body: string) => body.replace(/^ENC:/, "")),
+    secretCrypto: {
+        encrypt: vi.fn(async (_peer: string, text: string) => "ENC:" + text),
+        decrypt: vi.fn(async (_from: string, body: string) => body.replace(/^ENC:/, "")),
+    },
     fetchTurnCredentials: vi.fn(async () => ({username: "u", credential: "c", ttl: 600, uris: ["turn:x:3478?transport=udp"]})),
 }));
-import { encryptForSend, decryptReceived } from "@/features/e2ee";
-const encMock = vi.mocked(encryptForSend);
-const decMock = vi.mocked(decryptReceived);
+import { secretCrypto } from "@/features/e2ee";
+const encMock = vi.mocked(secretCrypto.encrypt);
+const decMock = vi.mocked(secretCrypto.decrypt);
 const enc = (o: unknown) => "ENC:" + JSON.stringify(o);
 
 class MockRTCPeerConnection {

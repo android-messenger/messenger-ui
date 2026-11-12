@@ -6,7 +6,7 @@ import {toOutboxMessage} from "@/features/chat/model/mapper.ts";
 import {upsertMessage} from "@/features/chat/model/historyCache.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {preserveSelectedConversation} from "@/features/chat/model/preserveSelectedConversation.ts";
-import {encryptForSend, savePlaintext, deletePlaintextForChat} from "@/features/e2ee";
+import {secretCrypto, savePlaintext, deletePlaintextForChat} from "@/features/e2ee";
 import {deleteChatCache} from "@/features/chat/db/db.ts";
 import toast from "react-hot-toast";
 import i18n from "@/shared/i18n";
@@ -111,7 +111,7 @@ export const chatMessagesService = {
         }
         if (secret && recipientId) {
             try {
-                wireText = await encryptForSend(recipientId, text);
+                wireText = await secretCrypto.encrypt(recipientId, text);
             } catch (e) {
                 logger.error("e2ee: encrypt failed — NOT sending (fail-closed)", e as Error);
                 // A peer with no keys yet gets a specific, actionable message; anything else is generic.

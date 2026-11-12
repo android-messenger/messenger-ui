@@ -1,5 +1,5 @@
 import {createSlice, type PayloadAction} from "@reduxjs/toolkit";
-import {E2EE_LS} from "@/features/e2ee/lib/stores.ts";
+import {E2EE_LS} from "@/features/e2ee/wire.ts";
 
 // Which conversations are in E2EE "secret" mode. A chat becomes secret when the user turns the mode on
 // or when the first encrypted message arrives in it (chatMiddleware), and it never goes back to normal:

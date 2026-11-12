@@ -275,7 +275,6 @@ function ChatWindow({
 
             {safetyOpen && counterpartId && myId && (
                 <SafetyNumberModal
-                    myUserId={myId}
                     peerUserId={counterpartId}
                     peerName={chat?.name ?? counterpartId}
                     onClose={() => setSafetyOpen(false)}
