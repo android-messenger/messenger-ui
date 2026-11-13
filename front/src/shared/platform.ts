@@ -92,6 +92,8 @@ export interface CallPlugin {
 /** `AppSettings` plugin (S1 §5.5): the UI language for native screens and notifications. */
 export interface AppSettingsPlugin {
     setLanguage(o: { lang: string }): Promise<void>;
+    /** The version of the APK. Absent in an APK older than 10096. */
+    getAppInfo?(): Promise<{ versionName: string; versionCode: number }>;
 }
 
 interface CapacitorGlobal {
