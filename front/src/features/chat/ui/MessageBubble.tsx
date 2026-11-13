@@ -1,3 +1,4 @@
+import {callNoteKey} from "@/features/chat/model/callNote.ts";
 import toast from "react-hot-toast";
 import {useTranslation} from "react-i18next";
 import {isUlid, ulidTimeMs} from "@/shared/ulid/ulid.ts";
@@ -138,6 +139,9 @@ export function MessageBubble({
                 // after history loads): show a placeholder, NEVER the raw E2EE envelope — that was the
                 // "encrypted text flashes for a few seconds" on open.
                 <span className="italic opacity-60">{t("chat.decrypting")}</span>
+            ) : callNoteKey(msg.meta) ? (
+                // An unanswered call (model/callNote.ts): the line in MY language, not the sender's text.
+                <span className="italic">📞 {t(callNoteKey(msg.meta)!)}</span>
             ) : (
                 linkify(msg.text)
             )}
