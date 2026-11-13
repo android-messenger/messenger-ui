@@ -62,21 +62,48 @@ export async function toDisk(value: unknown, place: string): Promise<unknown> {
 }
 
 /**
- * The value behind a record read from disk, or undefined when there is nothing readable: no record, a
- * record of the other kind (an open one in the app, a sealed one in a browser), a record from another
- * place, Vault keys that are gone, or — unless `wait` — a Vault that does not open within VAULT_WAIT_MS.
+ * How a read of a record ended. The code that WRITES after a read must tell these apart:
+ *  - `none`   — nothing is stored: start empty, writing is allowed;
+ *  - `ok`     — read;
+ *  - `gone`   — stored, and can never be read again: the Vault lost its key (the screen lock was removed)
+ *               or the record is damaged. Start empty, writing is allowed — the old record is replaced;
+ *  - `unread` — stored, not read THIS time: the Vault is closed, the app did not answer, the wait ran out.
+ *               Nothing may be written over the record; the read is to be repeated.
  */
-export async function fromDisk<T>(stored: unknown, place: string, opts?: {wait?: boolean}): Promise<T | undefined> {
-    if (stored === undefined || stored === null) return undefined;
-    if (!sealing()) return isSealed(stored) ? undefined : stored as T;
-    if (!isSealed(stored)) return undefined;
+export type Read<T> = {state: "none"} | {state: "ok"; value: T} | {state: "gone"} | {state: "unread"};
+
+const VAULT_KEY_GONE = "VAULT_KEY_GONE";
+const VAULT_CORRUPT = "VAULT_CORRUPT";
+
+/** Reads a record taken from disk. Never throws. A record of the other kind (an open one in the app, a
+ * sealed one in a browser) counts as `none`; unless `wait`, a Vault that does not open within
+ * VAULT_WAIT_MS is `unread`. */
+export async function readDisk<T>(stored: unknown, place: string, opts?: {wait?: boolean}): Promise<Read<T>> {
+    if (stored === undefined || stored === null) return {state: "none"};
+    if (!sealing()) return isSealed(stored) ? {state: "none"} : {state: "ok", value: stored as T};
+    if (!isSealed(stored)) return {state: "none"};
+    let plain: ArrayBuffer | null;
     try {
         const call = unwrapBytes(stored, PURPOSE);
-        const plain = opts?.wait ? await call : await soon(call);
-        if (!plain) return undefined;
-        const inside = JSON.parse(dec.decode(plain)) as Inside;
-        return inside?.p === place ? inside.v as T : undefined;
-    } catch {
-        return undefined;   // the Vault lost its keys, a damaged record, a sign-out while waiting
+        plain = opts?.wait ? await call : await soon(call);
+    } catch (e) {
+        const code = (e as {code?: unknown} | null)?.code;
+        return {state: code === VAULT_KEY_GONE || code === VAULT_CORRUPT ? "gone" : "unread"};
     }
+    if (!plain) return {state: "unread"};
+    try {
+        const inside = JSON.parse(dec.decode(plain)) as Inside;
+        return inside?.p === place ? {state: "ok", value: inside.v as T} : {state: "gone"};
+    } catch {
+        return {state: "gone"};   // opened, but not a record of ours
+    }
+}
+
+/**
+ * The value behind a record read from disk, or undefined when there is nothing readable (any outcome of
+ * readDisk but `ok`). For a cache only: a caller that writes afterwards uses readDisk.
+ */
+export async function fromDisk<T>(stored: unknown, place: string, opts?: {wait?: boolean}): Promise<T | undefined> {
+    const r = await readDisk<T>(stored, place, opts);
+    return r.state === "ok" ? r.value : undefined;
 }

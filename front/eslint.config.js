@@ -24,7 +24,7 @@ export default defineConfig([
     // Spec 001, FR-050: keys and sessions of secret chats are reached only through the E2EE feature's
     // public files (index.ts, wire.ts). Tests may open the internals they test.
     files: ['src/**/*.{ts,tsx}'],
-    ignores: ['src/features/e2ee/**', '**/__tests__/**', '**/__test__/**'],
+    ignores: ['src/features/e2ee/**', '**/__tests__/**', '**/__test__/**', '**/__audit__/**'],
     rules: {
       'no-restricted-imports': ['error', {
         patterns: [{

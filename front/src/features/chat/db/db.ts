@@ -8,7 +8,7 @@ import {ATTACHMENT_CACHE_MAX_BYTES} from "@/shared/config/chat.ts";
 import type {OutboxState} from "@/features/chat/model/types";
 import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 import {isSecretEnvelope} from "@/features/e2ee/wire.ts";
-import {fromDisk, sealing, toDisk} from "./sealed.ts";
+import {fromDisk, readDisk, sealing, toDisk, type Read} from "./sealed.ts";
 
 // In the Android app the records that hold text — the send queue, the history, the small values — are
 // sealed by the app's Vault (sealed.ts): what is on disk is ciphertext. Attachment files are not encrypted
@@ -75,18 +75,30 @@ export async function saveOutboxToDB(data: OutboxState) {
     });
 }
 
-export async function loadOutboxFromDB(): Promise<OutboxState | null> {
-    const db = await initDB();
-    const stored = await db.get(STORE_NAME, STORE_KEY);
-    // The queue holds messages the user has not sent yet: wait for the key rather than report an empty queue.
-    const result = await fromDisk<OutboxState>(stored, OUTBOX_PLACE, {wait: true});
-    if (result) return result;
-    // A queue an earlier build of the app left in the clear: keep the unsent messages, seal them now.
-    if (sealing() && stored && Array.isArray((stored as OutboxState).messages)) {
-        await saveOutboxToDB(stored as OutboxState).catch(() => { /* sealed on the next change */ });
-        return stored as OutboxState;
+/** The stored send queue and how its read ended (sealed.ts, Read). Never throws: a storage error is `unread`. */
+export async function readOutbox(): Promise<Read<OutboxState>> {
+    try {
+        const db = await initDB();
+        const stored = await db.get(STORE_NAME, STORE_KEY);
+        // The queue holds messages the user has not sent yet: wait for the key rather than report an empty queue.
+        const result = await readDisk<OutboxState>(stored, OUTBOX_PLACE, {wait: true});
+        if (result.state !== "none") return result;
+        // A queue an earlier build of the app left in the clear: keep the unsent messages, seal them now.
+        if (sealing() && stored && Array.isArray((stored as OutboxState).messages)) {
+            await saveOutboxToDB(stored as OutboxState).catch(() => { /* sealed on the next change */ });
+            return {state: "ok", value: stored as OutboxState};
+        }
+        return result;
+    } catch {
+        return {state: "unread"};
     }
-    return null;
+}
+
+/** The stored send queue, or null when there is none or it was not read. A caller that writes the queue
+ * afterwards uses readOutbox. */
+export async function loadOutboxFromDB(): Promise<OutboxState | null> {
+    const r = await readOutbox();
+    return r.state === "ok" ? r.value : null;
 }
 
 // --- per-conversation history cache -------------------------------------------------
@@ -299,7 +311,17 @@ export async function pruneAttachmentIndex(): Promise<number> {
 export const KV = {drafts: "drafts", secretChats: "secretChats", stickyChats: "stickyChats", names: "names"} as const;
 export type KvName = typeof KV[keyof typeof KV];
 
-/** The stored value, or null. `wait` — wait for the key (startup restore) instead of answering null. */
+/** The stored value and how its read ended (sealed.ts, Read). Never throws: a storage error is `unread`. */
+export async function kvRead<T>(name: KvName, opts?: {wait?: boolean}): Promise<Read<T>> {
+    try {
+        const db = await initDB();
+        return await readDisk<T>(await db.get(KV_STORE_NAME, name), kvPlace(name), opts);
+    } catch {
+        return {state: "unread"};
+    }
+}
+
+/** The stored value, or null. `wait` — wait for the key instead of answering null. */
 export async function kvGet<T>(name: KvName, opts?: {wait?: boolean}): Promise<T | null> {
     const db = await initDB();
     return (await fromDisk<T>(await db.get(KV_STORE_NAME, name), kvPlace(name), opts)) ?? null;

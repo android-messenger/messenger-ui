@@ -129,6 +129,7 @@
     "decryptUnavailable": "🔒 Message unavailable",
     "encryptedMessage": "🔒 Encrypted message",
     "encryptFailed": "Couldn't encrypt — message not sent",
+    "storageNotReady": "Protected storage is not open yet — unlock the phone and try again",
     "secretChat": "Secret chat",
     "secretOn": "End-to-end encrypted",
     "secretEnableTitle": "Turn on secret chat (end-to-end encryption)",
