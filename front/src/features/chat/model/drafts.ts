@@ -4,14 +4,27 @@
 //
 // A SECRET chat's draft is the exception: it is plaintext of an E2EE conversation, so it never goes to
 // localStorage. It lives in this module's memory only (`persist: false`) and is lost on reload.
+//
+// In the Android app nothing goes to localStorage: the map lives in memory and its disk copy is one sealed
+// record (features/chat/db, KV.drafts), restored at startup by hydrateDrafts.
 
-const KEY = "wolp.drafts.v1";
+import {kvSet, KV} from "@/features/chat/db/db.ts";
+import {sealing} from "@/features/chat/db/sealed.ts";
+
+export const DRAFTS_KEY = "wolp.drafts.v1";
+const KEY = DRAFTS_KEY;
 const MAX_DRAFTS = 300; // cap the map so it can't grow unbounded
 
 /** Memory-only drafts (secret chats). Never serialized. */
 const memory = new Map<string, string>();
 
+// Android app: the persisted drafts, and whether the disk copy has been read (before that nothing is
+// written, or a draft typed in the first second would replace the stored map).
+let appMap: Record<string, string> = {};
+let appReady = false;
+
 function read(): Record<string, string> {
+    if (sealing()) return appMap;
     try {
         const raw = localStorage.getItem(KEY);
         const obj = raw ? JSON.parse(raw) : null;
@@ -22,6 +35,11 @@ function read(): Record<string, string> {
 }
 
 function write(map: Record<string, string>): void {
+    if (sealing()) {
+        appMap = map;
+        if (appReady) void kvSet(KV.drafts, map).catch(() => { /* best-effort */ });
+        return;
+    }
     try {
         localStorage.setItem(KEY, JSON.stringify(map));
     } catch { /* quota / disabled → skip */ }
@@ -59,8 +77,15 @@ export function clearDraft(chatId: string): void {
     saveDraft(chatId, "");
 }
 
+/** Android app, startup: the drafts read from the sealed record. What was typed meanwhile wins. */
+export function hydrateDrafts(saved: Record<string, string> | null): void {
+    appMap = {...(saved ?? {}), ...appMap};
+    appReady = true;
+}
+
 export function clearAllDrafts(): void {
     memory.clear();
+    appMap = {};   // the sealed record goes with clearAllLocalData
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
 }
 

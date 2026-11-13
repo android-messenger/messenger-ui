@@ -94,7 +94,8 @@ describe("logout wipes E2EE keys and secret data", () => {
     it("after logout no E2EE database and no E2EE localStorage key is left (scenario 1.1)", async () => {
         const store = await loggedInStoreWithData();
         expect(await dbNames()).toEqual(expect.arrayContaining(E2EE_DBS));
-        expect(localStorage.getItem("wolp.secretChats")).toContain("c-secret");
+        expect(store.getState().secretChats.byId).toEqual({"c-secret": true});   // in the app the list is not in localStorage
+        expect(localStorage.getItem("wolp.secretChats")).toBeNull();
         expect(localStorage.getItem("wolp.e2eeVerified")).toContain("peer-1");
 
         await fullLogout(store.dispatch);
@@ -259,7 +260,7 @@ describe("logout wipes E2EE keys and secret data", () => {
 
         expect(await signalMeta("deviceId")).toBe("device-A");
         expect(await loadPlaintext("m1")).toBe("meet at the old bridge at nine");
-        expect(localStorage.getItem("wolp.secretChats")).toContain("c-secret");
+        expect(store.getState().secretChats.byId).toEqual({"c-secret": true});
         expect(app.plugin.e2eeWipe).not.toHaveBeenCalled();
     });
 });

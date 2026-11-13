@@ -4,7 +4,7 @@
 // window.Capacitor.Plugins itself, so the browser bundle carries only these few lines.
 
 /** Vault purposes reachable from JS (S1 §5.1); the native side refuses anything else. */
-export type VaultPurpose = "e2ee" | "e2ee-plaintext";
+export type VaultPurpose = "e2ee" | "e2ee-plaintext" | "chat-cache";
 
 /** `DeviceTrust` plugin (S1 §5.1). Data and blobs are standard base64. */
 export interface DeviceTrustPlugin {

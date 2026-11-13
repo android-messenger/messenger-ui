@@ -13,5 +13,9 @@ export const ATTACHMENT_INDEX_KEY = 'index';
 // Legacy stores (v3/v4), replaced by the unified cache above — deleted in the v5 upgrade.
 export const THUMB_STORE_NAME = 'attachment-thumbs';
 export const THUMB_META_STORE = 'attachment-thumbs-lru';
+// Small values the Android app keeps sealed instead of in localStorage: drafts, the lists of secret and
+// sticky chats, names. Keyed by name (KV in db.ts). Not used in a browser.
+export const KV_STORE_NAME = 'kv';
 // Bumped to 5: unified size-bounded attachment cache (drops the old thumbnail-only stores).
-export const DB_VERSION = 5;
+// Bumped to 6: the kv store.
+export const DB_VERSION = 6;
