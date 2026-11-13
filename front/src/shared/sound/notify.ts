@@ -93,6 +93,7 @@ if (typeof document !== "undefined") {
 let ringEl: HTMLAudioElement | null = null;
 let ringElTried = false;
 let ringPrimed = false;
+let ringPriming = false;                // the muted play of primeRingtone() is under way
 let ringViaEl = false;
 let ringActive = false;                 // are we supposed to be ringing right now?
 let ringGen = 0;                        // bumped on every start/stop, to invalidate a late play() rejection
@@ -108,6 +109,9 @@ function ringtoneEl(): HTMLAudioElement | null {
         ringEl = new Audio(url);
         ringEl.loop = true;
         ringEl.preload = "auto";
+        // Android pauses the element itself when something else takes the audio (a call) and starts it
+        // again when the audio comes back — also after stopRinging(). Nothing plays unless we are ringing.
+        ringEl.addEventListener?.("play", () => { if (!ringActive && !ringPriming) { try { ringEl?.pause(); } catch { /* ignore */ } } });
     } catch { ringEl = null; }
     return ringEl;
 }
@@ -118,11 +122,12 @@ function primeRingtone() {
     if (!el) return;
     try {
         el.muted = true;
+        ringPriming = true;
         const p = el.play();
-        const settle = () => { try { el.pause(); el.currentTime = 0; el.muted = false; ringPrimed = true; } catch { /* ignore */ } };
-        if (p && typeof p.then === "function") p.then(settle).catch(() => { try { el.muted = false; } catch { /* ignore */ } });
+        const settle = () => { ringPriming = false; try { el.pause(); el.currentTime = 0; el.muted = false; ringPrimed = true; } catch { /* ignore */ } };
+        if (p && typeof p.then === "function") p.then(settle).catch(() => { ringPriming = false; try { el.muted = false; } catch { /* ignore */ } });
         else settle();
-    } catch { try { el.muted = false; } catch { /* ignore */ } }
+    } catch { ringPriming = false; try { el.muted = false; } catch { /* ignore */ } }
 }
 
 /** Start the looping ringtone (incoming call / outgoing ringback). No-op if already ringing. */

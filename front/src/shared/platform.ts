@@ -79,6 +79,8 @@ export type AudioRoute = "earpiece" | "speaker" | "bluetooth" | "wired";
  */
 export interface CallPlugin {
     started(o: { media: "audio" | "video"; conversationId: string; peerName?: string }): Promise<void>;
+    /** The ringback tone of an outgoing call, played by the app on the call's audio route (APK 10099+). */
+    ringback(o: { on: boolean }): Promise<void>;
     mediaChanged(o: { media: "audio" | "video" }): Promise<void>;
     ended(): Promise<void>;
     getAudioRoutes(): Promise<{ routes: AudioRoute[]; current: AudioRoute | "" }>;
