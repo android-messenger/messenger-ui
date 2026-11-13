@@ -14,7 +14,6 @@ import {E2EE_DATABASES} from "@/features/e2ee/wire.ts";
 const KNOWN_DBS = [
     ...E2EE_DATABASES,      // device key, Signal identity + sessions, sealed plaintext, recovery queue
     "chatDB",               // outbox + per-chat history + media-attachment cache
-    "wolp-cache-key",    // Android app: the wrapped key of that cache
     "wolp-names",        // directory name cache
     "wolp-pending-call", // a call awaiting pickup
     "wolp-push-dedup",   // cross-channel notification dedup (SW-owned, same origin)

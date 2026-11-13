@@ -147,7 +147,7 @@ export async function hydrateStore(store: ReturnType<typeof configureAppStore>) 
     void scrubHistoryCache();
     void sweepRenamedStores();   // what a build before the rename of the stores left on the device
     dropPersistedDrafts(Object.keys(loadSecretChats()));
-    void dropOpenCache();        // Android app: the history and attachments an earlier build stored in the clear
+    void dropOpenCache();        // Android app: the history an earlier build stored in the clear
     // Android app: this does not hold up the start — it waits for the phone to be unlocked.
     if (sealing()) {
         void restoreSealed(store);
