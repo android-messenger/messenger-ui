@@ -1,12 +1,11 @@
 import React, {useEffect, useState} from "react";
 import {useDispatch, useSelector} from "react-redux";
-import type {RootState} from "@/store/store";
+import {dropForeignCache, type AppDispatch, type RootState} from "@/store/store";
 import {Navigate} from "react-router-dom";
 import {logger} from "@/shared/logger/logger.ts";
 import {setUser} from "@/features/auth/slices/userSlice.ts";
 import {isNotLogged} from "@/shared/utils/checks.ts";
 import {startE2eeUpkeep, ensureE2eeOwner} from "@/features/e2ee";
-import {clearSecretChats} from "@/features/chat/model/slices/secretChatsSlice.ts";
 import {markLogin} from "@/shared/diag/diag.ts";
 import { kratos } from "../model/services/kratos.ts";
 
@@ -23,7 +22,7 @@ async function checkSession() {
 
 export function RequireAuth({ children }: { children: React.ReactNode }) {
     const [loading, setLoading] = useState(true);
-    const dispatch = useDispatch();
+    const dispatch = useDispatch<AppDispatch>();
 
     useEffect(() => {
         checkSession().then(async (session) => {
@@ -31,7 +30,8 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
                 logger.debug("session found");
                 // Before anything reads a key: E2EE data left on this device by ANOTHER user (or by an
                 // interrupted logout) is erased here (spec 001, FR-005, FR-006). Never throws.
-                if (await ensureE2eeOwner(session.identity.id)) dispatch(clearSecretChats());
+                // The chat cache has no owner mark of its own: it goes together with the E2EE data.
+                if (await ensureE2eeOwner(session.identity.id)) await dispatch(dropForeignCache());
 
                 // Kratos `traits.name` may be a string OR an object ({first,last}),
                 // depending on the identity schema. Coerce to a non-empty string so the

@@ -32,6 +32,11 @@ function inOrder<T>(place: string, write: () => Promise<T>): Promise<T> {
 }
 
 
+// Sign-out clears the stores (clearAllLocalData) while a write may still be at the app, being sealed. Such
+// a write must not land afterwards: the next account on this phone would read it. Every write notes the
+// count of clears when it was asked for and gives up if a clear has happened since.
+let clears = 0;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dbPromise: Promise<IDBPDatabase<any>> | null = null;
 
@@ -68,9 +73,11 @@ export const initDB = async () => {
 };
 
 export async function saveOutboxToDB(data: OutboxState) {
+    const at = clears;
     const db = await initDB();
     await inOrder(OUTBOX_PLACE, async () => {
         const rec = await toDisk(data, OUTBOX_PLACE);
+        if (at !== clears) return;
         await db.put(STORE_NAME, rec, STORE_KEY);
     });
 }
@@ -122,11 +129,24 @@ export function toDiskRows(messages: ChatMessage[]): ChatMessage[] {
 
 export async function saveHistoryToDB(chatId: string, messages: ChatMessage[]) {
     if (!chatId) return;
+    const at = clears;
     const db = await initDB();
     await inOrder(historyPlace(chatId), async () => {
-        const rec = await toDisk(toDiskRows(messages), historyPlace(chatId));
+        const rows = toDiskRows(messages);
+        const rec = await toDisk(rows, historyPlace(chatId));
+        if (at !== clears) return;
         await db.put(HISTORY_STORE_NAME, rec, chatId);
+        // Which attachment files belong to this chat, kept open (the files are open too, their ids are
+        // the keys of their store): deleteChatCache must find them while the Vault is closed.
+        const files = attachmentIds(rows);
+        if (files.length) await db.put(ATTACHMENT_INDEX_STORE, files, chatFilesKey(chatId));
+        else await db.delete(ATTACHMENT_INDEX_STORE, chatFilesKey(chatId));
     });
+}
+
+const chatFilesKey = (chatId: string) => `chat|${chatId}`;
+function attachmentIds(rows: ChatMessage[] | undefined): string[] {
+    return Array.isArray(rows) ? rows.map((m) => m?.meta?.attachmentId).filter((a): a is string => !!a) : [];
 }
 
 export async function loadHistoryFromDB(chatId: string): Promise<ChatMessage[] | null> {
@@ -198,9 +218,11 @@ async function writeCacheIndex(db: IDBPDatabase<unknown>, index: CacheIndexEntry
 
 export async function saveAttachmentBlob(attachmentId: string, blob: Blob) {
     if (!attachmentId || !blob) return;
+    const at = clears;
     const db = await initDB();
     // The index is read, changed and written back: one such change at a time.
     await inOrder(INDEX_PLACE, async () => {
+        if (at !== clears) return;
         await db.put(ATTACHMENT_BLOB_STORE, blob, attachmentId);
         const index = await readCacheIndex(db);
         const next = [...index.filter((e) => e.id !== attachmentId), {id: attachmentId, size: blob.size || 0}];
@@ -233,6 +255,7 @@ export async function deleteAttachmentBlob(attachmentId: string) {
 // Wipe all locally-cached user data (outbox queue + per-conversation history + media cache). Called on
 // logout so one user's queued messages, plaintext history and media never linger for the next user.
 export async function clearAllLocalData() {
+    clears++;   // writes asked for before this line do not land after it
     const db = await initDB();
     await Promise.all([
         db.clear(STORE_NAME), db.clear(HISTORY_STORE_NAME),
@@ -263,9 +286,10 @@ export async function deleteChatCache(chatId: string): Promise<void> {
     try {
         const db = await initDB();
         const msgs = await fromDisk<ChatMessage[]>(await db.get(HISTORY_STORE_NAME, chatId), historyPlace(chatId));
-        const aids = Array.isArray(msgs)
-            ? msgs.map((m) => m?.meta?.attachmentId).filter((a): a is string => !!a)
-            : [];
+        // The open list of the chat's files as well: with the Vault closed the history does not open, and
+        // the files would stay with nothing pointing to them.
+        const listed = await db.get(ATTACHMENT_INDEX_STORE, chatFilesKey(chatId));
+        const aids = Array.from(new Set([...attachmentIds(msgs), ...(Array.isArray(listed) ? listed as string[] : [])]));
         for (const aid of aids) await db.delete(ATTACHMENT_BLOB_STORE, aid).catch(() => {});
         if (aids.length) {
             // The index store holds ONE array-of-{id,size} record (keyed by ATTACHMENT_INDEX_KEY); the
@@ -277,6 +301,7 @@ export async function deleteChatCache(chatId: string): Promise<void> {
             const next = index.filter((e) => !dropped.has(e.id));
             if (next.length !== index.length) await writeCacheIndex(db, next);
         }
+        await db.delete(ATTACHMENT_INDEX_STORE, chatFilesKey(chatId));
         await db.delete(HISTORY_STORE_NAME, chatId);
     } catch { /* best-effort */ }
 }
@@ -329,9 +354,11 @@ export async function kvGet<T>(name: KvName, opts?: {wait?: boolean}): Promise<T
 
 export async function kvSet(name: KvName, value: unknown): Promise<void> {
     if (!sealing()) return;   // a browser keeps these in localStorage
+    const at = clears;
     const db = await initDB();
     await inOrder(kvPlace(name), async () => {
         const rec = await toDisk(value, kvPlace(name));
+        if (at !== clears) return;
         await db.put(KV_STORE_NAME, rec, name);
     });
 }

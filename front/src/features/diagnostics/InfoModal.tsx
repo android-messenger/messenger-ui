@@ -5,10 +5,10 @@ import type {AppDispatch, RootState} from "@/store/store";
 import {appVersion, buildTime, getLoginAt, connectsInLast, connectBuckets} from "@/shared/diag/diag.ts";
 import {mediaStats} from "@/features/chat/db/db.ts";
 import {cryptoStats, type CryptoStats} from "@/features/e2ee";
-import {wipeAllStorage} from "./wipeStorage.ts";
+import {eraseEverything} from "./eraseEverything.ts";
 import {canInstall, isStandalone, promptInstall} from "@/shared/pwa/installPrompt.ts";
 import {appSettings, deviceTrust, isNativeApp} from "@/shared/platform.ts";
-import {fullLogout, goLoginAfterLogout} from "@/features/auth/model/services/fullLogout.ts";
+import {goLoginAfterLogout} from "@/features/auth/model/services/fullLogout.ts";
 
 // Diagnostics / info page (modal): app identity, storage usage, encryption state, connection health.
 // All numbers are read on open. The one action is "erase everything": it signs out and erases the device.
@@ -119,10 +119,9 @@ export function InfoModal({onClose}: {onClose: () => void}) {
     const doInstall = async () => { await promptInstall(); setInstallable(canInstall()); };
     const doWipe = async () => {
         setWiping(true);
-        // Sign out first: the push registration, the keys in the Android app's library, its record in the key
-        // directory and the session go too — erasing the interface's storage alone would leave all of them.
-        await fullLogout(dispatch);
-        await wipeAllStorage();
+        // Erases the device first, then signs out (push registration, the keys in the Android app's library,
+        // its record in the key directory, the session), then erases the rest.
+        await eraseEverything(dispatch);
         goLoginAfterLogout();   // a full page load: nothing stays in memory
     };
 

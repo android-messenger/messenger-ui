@@ -7,9 +7,9 @@ import wsReducer from "@/infrastructure/slices/websocketSlice.ts";
 import chatUiReducer from "@/features/chat/model/slices/chatUiSlice";
 import outboxReducer, { hydrateOutbox, mergeOutbox, markPersisted } from "@/features/chat/model/slices/outboxSlice";
 import presenceReducer from "@/features/presence/model/presenceSlice";
-import stickyChatsReducer, { saveStickyChats, hydrateSticky, STICKY_KEY } from "@/features/chat/model/slices/stickyChatsSlice";
+import stickyChatsReducer, { saveStickyChats, hydrateSticky, clearSticky, STICKY_KEY } from "@/features/chat/model/slices/stickyChatsSlice";
 import secretChatsReducer, { saveSecretChats, loadSecretChats, clearSecretChats, hydrateSecretChats, type SecretChats } from "@/features/chat/model/slices/secretChatsSlice";
-import { dropPersistedDrafts, hydrateDrafts, DRAFTS_KEY } from "@/features/chat/model/drafts.ts";
+import { dropPersistedDrafts, hydrateDrafts, clearAllDrafts, DRAFTS_KEY } from "@/features/chat/model/drafts.ts";
 import type { ChatSummary } from "@/entities/conversation";
 
 // Middleware
@@ -21,11 +21,12 @@ import { authErrorListener } from "@/features/auth/middleware/authErrorMiddlewar
 import { e2eeRecoveryMiddleware, finishPendingE2eeWipe } from "@/features/e2ee";
 
 // DB functions
-import { loadOutboxFromDB, readOutbox, saveOutboxToDB, scrubHistoryCache, dropOpenCache, kvRead, KV } from "@/features/chat/db/db";
+import { loadOutboxFromDB, readOutbox, saveOutboxToDB, scrubHistoryCache, dropOpenCache, clearAllLocalData, kvRead, KV } from "@/features/chat/db/db";
 import { sealing, type Read } from "@/features/chat/db/sealed.ts";
 import { listsReady, setListsReady } from "@/features/chat/model/sealedLists.ts";
 import { E2EE_LS } from "@/features/e2ee/wire.ts";
 import { sweepRenamedStores } from "@/shared/storage/renamedStores.ts";
+import { erasePending, wipeAllStorage } from "@/features/diagnostics/wipeStorage.ts";
 import { chatApi } from "@/features/chat/rest/chatApi.ts";
 import { contactsApi } from "@/features/contacts/rest/contactsApi.ts";
 import { idsApi } from "@/features/directory/idsApi.ts";
@@ -145,6 +146,8 @@ export async function hydrateStore(store: ReturnType<typeof configureAppStore>) 
     // A logout wipe that was cut short (tab closed, app killed, a database held by another tab) is
     // finished first — before anything reads a key (spec 001, FR-005). The secret-chat set was loaded
     // from localStorage when the store was created, so drop the in-memory copy as well.
+    // "Erase everything" that was cut short (app killed while the network steps ran) is finished first of all.
+    if (erasePending()) await wipeAllStorage();
     if (await finishPendingE2eeWipe()) store.dispatch(clearSecretChats());
     void scrubHistoryCache();
     void sweepRenamedStores();   // what a build before the rename of the stores left on the device
@@ -199,7 +202,7 @@ function valueOrLocal<T>(read: Read<T>, localKey: string): T | null {
  * A record whose key is lost for good counts as empty (owner's decision 2026-11-13: every chat is then
  * not secret; the user turns the mode on again).
  */
-async function restoreSealed(store: ReturnType<typeof configureAppStore>): Promise<void> {
+async function restoreSealed(store: Pick<ReturnType<typeof configureAppStore>, "dispatch" | "getState">): Promise<void> {
     const run = ++restoreRun;
     for (;;) {
         const [outbox, secret, sticky, drafts] = await Promise.all([
@@ -211,7 +214,8 @@ async function restoreSealed(store: ReturnType<typeof configureAppStore>): Promi
         if (run !== restoreRun) return;
         if ([outbox, secret, sticky, drafts].every((r) => r.state !== "unread")) {
             // What an earlier build kept in localStorage is taken only now: a retry must find it again.
-            hydrateDrafts(valueOrLocal(drafts, DRAFTS_KEY));
+            const savedDrafts = valueOrLocal(drafts, DRAFTS_KEY);
+            hydrateDrafts(savedDrafts, {store: savedDrafts !== null && drafts.state !== "ok"});
             setListsReady(true);   // from here the subscribers write: the dispatches below save what was merged
             if (outbox.state === "ok") store.dispatch(mergeOutbox(outbox.value));
             store.dispatch(hydrateSecretChats(valueOrLocal(secret, E2EE_LS.secretChats)));
@@ -224,3 +228,19 @@ async function restoreSealed(store: ReturnType<typeof configureAppStore>): Promi
         if (run !== restoreRun) return;
     }
 }
+
+/**
+ * The cache on this device belongs to another account: its session ended without a sign-out (a 401), so
+ * nothing was erased then. Called when the owner check at sign-in found it (RequireAuth). Erases the chat
+ * cache, the queue, the lists and the drafts — on disk and in memory — and reads the (now empty) sealed
+ * lists again, so a read that was still waiting for the Vault cannot bring the other account's lists back.
+ */
+export const dropForeignCache = () => async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
+    restoreRun++;                       // a restore in flight gives up
+    if (sealing()) setListsReady(false);
+    dispatch(clearSecretChats());
+    dispatch(clearSticky());
+    clearAllDrafts();
+    await clearAllLocalData().catch(() => { /* best-effort */ });
+    if (sealing()) void restoreSealed({dispatch, getState});
+};
