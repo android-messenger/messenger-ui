@@ -238,27 +238,35 @@ describe("secret chats in the Android app go through the bridge", () => {
     });
 
     it("6.8 — the first start with the bridge erases the interface's own keys and marks, once; texts stay", async () => {
-        const {SignalStore} = await import("../lib/signalStore.ts");
+        const {openDB} = await import("idb");
+        const {getOwner, setOwner} = await import("../lib/ownerStore.ts");
         const {E2EE_LS} = await import("../lib/stores.ts");
-        bridge.plugin.vaultWrap.mockResolvedValue({blob: "AA=="});   // what the older version stored its session under
-        const store = new SignalStore();
-        await store.setOwner("me");
-        await store.saveIdentity("bob.1", new Uint8Array([1, 2, 3]).buffer);
-        await store.storeSession("bob.1", "ratchet state");
+        // what an older version of the interface kept: a peer's key and a session
+        const legacy = async <T,>(fn: (d: Awaited<ReturnType<typeof openDB>>) => Promise<T>): Promise<T> => {
+            const d = await openDB("e2ee-signal");
+            try { return await fn(d); } finally { d.close(); }
+        };
+        await setOwner("me");
+        await legacy(async (d) => {
+            await d.put("peers", new Uint8Array([1, 2, 3]).buffer, "bob.1");
+            await d.put("sessions", {kind: "native", blob: "AA=="}, "bob.1");
+            await d.put("meta", "device-A", "deviceId");
+        });
         localStorage.setItem(E2EE_LS.verified, '{"bob":"123"}');
         localStorage.setItem(E2EE_LS.secretChats, '{"c1":true}');
 
         const {dropInterfaceKeys, E2EE_NATIVE_KEYS_KEY} = await import("../lib/wipe.ts");
         await dropInterfaceKeys();
-        expect(await store.loadIdentityKey("bob.1")).toBeUndefined();
-        expect(await store.loadSession("bob.1")).toBeUndefined();
-        expect(await store.getOwner()).toBe("me");                               // whose data this is — kept
+        expect(await legacy((d) => d.get("peers", "bob.1"))).toBeUndefined();
+        expect(await legacy((d) => d.get("sessions", "bob.1"))).toBeUndefined();
+        expect(await legacy((d) => d.get("meta", "deviceId"))).toBeUndefined();
+        expect(await getOwner()).toBe("me");                                     // whose data this is — kept
         expect(localStorage.getItem(E2EE_LS.verified)).toBeNull();
         expect(localStorage.getItem(E2EE_LS.secretChats)).toBe('{"c1":true}');   // which chats are secret — kept
         expect(localStorage.getItem(E2EE_NATIVE_KEYS_KEY)).toBe("1");
 
-        await store.saveIdentity("carol.1", new Uint8Array([9]).buffer);
+        await legacy((d) => d.put("peers", new Uint8Array([9]).buffer, "carol.1"));
         await dropInterfaceKeys();                                               // already done: nothing is touched
-        expect(await store.loadIdentityKey("carol.1")).toBeDefined();
+        expect(await legacy((d) => d.get("peers", "carol.1"))).toBeDefined();
     });
 });

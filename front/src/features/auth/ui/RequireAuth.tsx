@@ -5,7 +5,7 @@ import {Navigate} from "react-router-dom";
 import {logger} from "@/shared/logger/logger.ts";
 import {setUser} from "@/features/auth/slices/userSlice.ts";
 import {isNotLogged} from "@/shared/utils/checks.ts";
-import {provisionE2EEInBackground, ensureE2eeOwner} from "@/features/e2ee";
+import {startE2eeUpkeep, ensureE2eeOwner} from "@/features/e2ee";
 import {clearSecretChats} from "@/features/chat/model/slices/secretChatsSlice.ts";
 import {markLogin} from "@/shared/diag/diag.ts";
 import { kratos } from "../model/services/kratos.ts";
@@ -56,9 +56,8 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
                     name: displayName || traits.email || session.identity.id,
                 }));
                 markLogin();   // diagnostics: session start
-                // Publish this device's E2EE public keys to the directory (best-effort, fire-and-forget,
-                // never affects login). Readies the ground for opt-in secret chats — no UI change yet.
-                provisionE2EEInBackground();
+                // Housekeeping of stored secret-message texts (the Android app only). Never affects login.
+                startE2eeUpkeep();
             }
             setLoading(false);
         });

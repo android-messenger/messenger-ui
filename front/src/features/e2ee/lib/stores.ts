@@ -6,8 +6,8 @@
 
 /** IndexedDB databases of the E2EE feature. Every `openDB` in features/e2ee takes its name from here. */
 export const E2EE_DB = {
-    device: "e2ee-device",          // the device wrapping key (browser; the Android app uses the Vault)
-    signal: "e2ee-signal",          // Signal identity, prekeys, sessions, peer identities, the owner
+    device: "e2ee-device",          // left by older browser versions (their own wrapping key); only erased now
+    signal: "e2ee-signal",          // whose data this is (the owner); keys of older versions, erased
     plaintext: "e2ee-plaintext",    // wrapped text of secret messages
     recovery: "e2ee-recovery",      // pending client-to-client recovery
 } as const;
@@ -17,7 +17,7 @@ export const E2EE_DATABASES: readonly string[] = Object.values(E2EE_DB);
 /** localStorage keys of the E2EE feature. */
 export const E2EE_LS = {
     secretChats: "wolp.secretChats",     // which chats are in secret mode
-    verified: "wolp.e2eeVerified",       // peers marked verified by safety number
+    verified: "wolp.e2eeVerified",       // left by older versions ("verified" marks); only erased now
 } as const;
 
 export const E2EE_LOCAL_KEYS: readonly string[] = Object.values(E2EE_LS);

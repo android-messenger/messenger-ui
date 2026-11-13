@@ -7,7 +7,8 @@ import {setSelectedChatId} from "@/features/chat/model/slices/chatUiSlice.ts";
 import {unencryptedAfterSecret} from "@/features/chat/model/unencrypted.ts";
 import {markSecret, unmarkSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
 import {SafetyNumberModal} from "@/features/e2ee/ui/SafetyNumberModal.tsx";
-import {KeyChangeLine} from "@/features/e2ee";
+import {KeyChangeLine, secretAvailable} from "@/features/e2ee";
+import toast from "react-hot-toast";
 import {useGetPresenceStatusQuery} from "@/features/chat/rest/chatApi.ts";
 import {fmtLastSeen} from "@/features/chat/model/lastSeen.ts";
 import {useWindowedHistory} from "@/features/chat/hooks/useWindowedHistory.ts";
@@ -272,6 +273,8 @@ function ChatWindow({
                 onToggleSecret={!isGroup && selectedChatId
                     ? () => {
                         if (secret) { if (window.confirm(t("chat.secretDisableConfirm"))) dispatch(unmarkSecret(selectedChatId)); }
+                        // A browser has no keys: the mode is not turned on there, the user is told where it works.
+                        else if (!secretAvailable()) toast.error(t("chat.appOnly"));
                         else if (window.confirm(t("chat.secretEnableConfirm"))) dispatch(markSecret(selectedChatId));
                     }
                     : undefined}

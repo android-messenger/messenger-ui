@@ -6,8 +6,8 @@ import {E2EE_DATABASES} from "@/features/e2ee/wire.ts";
 // plaintext, recovery queue, and the media/history caches), all of localStorage and sessionStorage, every
 // Cache Storage bucket (the PWA app-shell precache included), and the service worker. It is deliberately
 // total — for the critical case where the device must be left holding nothing readable. The caller MUST
-// hard-reload right after: on the next start, provisioning creates a FRESH device key from scratch, so the
-// old secret history (its ratchet keys gone) is unrecoverable by design. Everything here is best-effort and
+// hard-reload right after. The stored texts of secret messages are gone with it; the keys themselves are
+// in the Android app's library and are erased by a sign-out. Everything here is best-effort and
 // never throws — a wipe must make progress even if one store is unavailable.
 
 // Fallback list for browsers without indexedDB.databases() (Firefox). Keep in sync with the app's stores.

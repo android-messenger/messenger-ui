@@ -1,9 +1,14 @@
 // @vitest-environment node
 import "fake-indexeddb/auto";
-import {describe, it, expect} from "vitest";
+import {describe, it, expect, beforeAll, afterAll} from "vitest";
 import {savePlaintext, loadPlaintext, deletePlaintextForChat, sweepExpired} from "../atRest";
+import {installFakeApp} from "./fakeApp";
 
-// The at-rest store keeps decrypted secret plaintext (device-key-wrapped), keyed by message id, tagged with
+let app: ReturnType<typeof installFakeApp>;
+beforeAll(() => { app = installFakeApp(); });
+afterAll(() => app.uninstall());
+
+// The at-rest store keeps decrypted secret plaintext (wrapped by the app's Vault), keyed by message id, tagged with
 // chatId + savedAt. Verify: round-trip, per-chat wipe (delete chat), and disappearing expiry.
 // (Expiry is forced with a negative TTL — every record is then "older than the cutoff" — rather than fake
 // timers, which stall fake-indexeddb's timer-driven async.)

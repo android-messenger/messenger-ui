@@ -1,15 +1,15 @@
 // The ONE encryption module of secret chats (spec 001, story 6, FR-050). Chat and call code reach keys and
 // sessions only through these operations — none of them returns a key or signs caller-supplied data.
 //
-// Two implementations (FR-051): in the Android app — the app's bridge (lib/bridgeCrypto.ts; keys and
-// sessions live in the app's library); in a browser — the JavaScript code (lib/browserCrypto.ts, for
-// debugging only). The two do not understand each other: a browser and a phone cannot hold a secret chat.
+// The implementation is the Android app's bridge (lib/bridgeCrypto.ts): keys and sessions live in the
+// app's library. A browser has none: there every operation that needs a key is refused with `app_only`
+// (lib/appOnlyCrypto.ts) — secret chats and calls work only in the app.
 
 import {isNativeApp} from "@/shared/platform.ts";
-import {browserCrypto} from "./lib/browserCrypto.ts";
+import {appOnlyCrypto} from "./lib/appOnlyCrypto.ts";
 import {bridgeCrypto} from "./lib/bridgeCrypto.ts";
 
-/** How far the peer's key has been checked. "passport" and "reverify" exist only in the app:
+/** How far the peer's key has been checked.
  *  "reverify" — the peer was compared by safety number and then changed the key; sending is refused
  *  until the user compares again or takes the mark off. */
 export type PeerTrust = "unverified" | "passport" | "verified" | "reverify";
@@ -17,7 +17,7 @@ export type PeerTrust = "unverified" | "passport" | "verified" | "reverify";
 export interface PeerState {
     trust: PeerTrust;
     /** The peer's key changed and the user has not closed the notice yet (keyChangeSeen) nor compared the
-     *  number again. The browser implementation never sets it: there a key change just drops the "verified" mark. */
+     *  number again. */
     keyChanged: boolean;
 }
 
@@ -46,4 +46,7 @@ export interface SecretCrypto {
     decryptRecovery(peerUserId: string, chatId: string, items: RecoverCipher[]): Promise<Array<{mid: string; text: string}>>;
 }
 
-export const secretCrypto: SecretCrypto = isNativeApp() ? bridgeCrypto : browserCrypto;
+/** True where secret chats and calls work: in the Android app. */
+export function secretAvailable(): boolean { return isNativeApp(); }
+
+export const secretCrypto: SecretCrypto = secretAvailable() ? bridgeCrypto : appOnlyCrypto;

@@ -7,7 +7,7 @@ import type {
 } from "@/features/call/model/types.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {secretCrypto} from "@/features/e2ee";
-import {sendFailureKey} from "@/features/e2ee/wire.ts";
+import {sendFailureKey, refusalCode} from "@/features/e2ee/wire.ts";
 import toast from "react-hot-toast";
 import i18n from "@/shared/i18n";
 
@@ -277,6 +277,7 @@ export class WebRTCService {
         } catch (err) {
             if (gen !== this.generation) return;
             logger.warn("call: undecryptable offer — rejecting", err as Error);
+            if (refusalCode(err) === "app_only") toast.error(i18n.t(sendFailureKey(err)));   // a browser: say where calls work
             this.send({type: "call:end", to: from});
             this.cleanup();
             return;

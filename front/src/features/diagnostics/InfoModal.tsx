@@ -93,7 +93,7 @@ export function InfoModal({onClose}: {onClose: () => void}) {
     const doWipe = async () => {
         setWiping(true);
         await wipeAllStorage();
-        // Hard reload: a fresh boot with no device key → provisioning creates a new one on next sign-in.
+        // Hard reload: a fresh boot with nothing stored.
         window.location.reload();
     };
 
@@ -140,12 +140,9 @@ export function InfoModal({onClose}: {onClose: () => void}) {
                 </Section>
 
                 <Section title={t("info.encryption")}>
-                    <Row label={t("info.masterKey")} value={crypto ? fmtWhen(crypto.deviceKeyCreatedAt, locale) : "…"}/>
                     <Row label={t("info.secretMsgs")} value={crypto ? `${crypto.secretMessages} · ${fmtBytes(crypto.secretBytes)}` : "…"}/>
                     <Row label={t("info.pending")} value={crypto ? crypto.pendingRecovery : "…"}/>
-                    <Row label={t("info.verified")} value={crypto ? crypto.verifiedContacts : "…"}/>
                     <Row label={t("info.protocol")} value={crypto?.protocol ?? "…"} mono/>
-                    <Row label={t("info.library")} value={crypto ? `${crypto.lib} · env v${crypto.envelope}` : "…"} mono/>
                 </Section>
 
                 <Section title={t("info.connection")}>

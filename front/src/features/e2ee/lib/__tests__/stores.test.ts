@@ -19,18 +19,25 @@ describe("E2EE stores list", () => {
             for (const m of text.matchAll(/openDB\(\s*([^,)]+)/g)) {
                 opens++;
                 const arg = m[1].trim();
-                // E2EE_DB.<name>, or the SignalStore's own name whose default is E2EE_DB.signal (below)
-                if (!/^E2EE_DB\.\w+$/.test(arg) && arg !== "this.dbName") offenders.push(`${path}: openDB(${arg}`);
+                if (!/^E2EE_DB\.\w+$/.test(arg)) offenders.push(`${path}: openDB(${arg}`);
             }
             if (/indexedDB\.open\(/.test(text)) offenders.push(`${path}: raw indexedDB.open`);
         }
         expect(offenders).toEqual([]);
-        expect(opens).toBe(E2EE_DATABASES.length);               // four databases, four places that open them
+        // Three places open a database. The fourth name, e2ee-device, was the wrapping key of older browser
+        // versions: nothing opens it any more, it stays in the list so that a logout erases it.
+        expect(opens).toBe(E2EE_DATABASES.length - 1);
     });
 
-    it("the SignalStore opens the listed database by default", () => {
-        const text = files.find((f) => f.path === "signalStore.ts")?.text;
-        expect(text).toMatch(/constructor\(dbName: string = E2EE_DB\.signal\)/);
+    it("no JavaScript implementation of the keys is left in the feature", () => {
+        for (const gone of ["signalStore.ts", "secretSession.ts", "provisioning.ts", "keyDirectory.ts", "browserCrypto.ts"]) {
+            expect(files.some((f) => f.path.endsWith(gone))).toBe(false);
+        }
+        for (const {path, text} of files) {
+            expect(text, path).not.toMatch(/libsignal-protocol-typescript/);
+            expect(text, path).not.toMatch(/crypto\.subtle/);
+            expect(text, path).not.toMatch(/key-directory\/v1\/keys/);
+        }
     });
 
     it("no database name is written out anywhere else in the feature", () => {

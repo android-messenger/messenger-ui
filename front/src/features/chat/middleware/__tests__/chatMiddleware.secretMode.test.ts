@@ -6,6 +6,7 @@ import {configureStore} from "@reduxjs/toolkit";
 // turns the mode off; the user does, at will.
 
 const h = vi.hoisted(() => ({
+    inApp: true,
     decryptReceived: vi.fn(async () => "hello"),
     loadPlaintext: vi.fn(async (): Promise<string | null> => "hello"),
     savePlaintext: vi.fn(async () => true),
@@ -29,6 +30,7 @@ vi.mock("@/features/notifications/desktopNotification.ts", () => ({showDesktopNo
 vi.mock("@/shared/i18n", () => ({default: {t: (k: string) => k}}));
 vi.mock("@/features/e2ee", () => ({
     secretCrypto: {decrypt: h.decryptReceived},
+    secretAvailable: () => h.inApp,
     savePlaintext: h.savePlaintext, loadPlaintext: h.loadPlaintext, E2EE_PLAINTEXT_TTL_MS: 172_800_000,
     reportUndecryptable: vi.fn(() => ({type: "e2ee/report"})),
 }));

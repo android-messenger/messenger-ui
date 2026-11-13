@@ -7,7 +7,7 @@ import {secretStateKey} from "../lib/failure.ts";
 import {addPending, allPending, bumpAttempt, removePending, type PendingItem} from "./pendingStore.ts";
 import {RECOVER_REQ, RECOVER_RESP, buildRequest, buildResponse, applyResponse, type RecoverReq, type RecoverResp} from "./protocol.ts";
 import {REKEY_HINT, makeThrottle, REKEY_COALESCE_MS} from "../lib/rekeyHint.ts";
-import {secretCrypto} from "../crypto.ts";
+import {secretCrypto, secretAvailable} from "../crypto.ts";
 import {presenceJoin, type ClientData} from "@/features/presence/model/presenceSlice.ts";
 
 // Coalesce inbound rekey hints: at most one roster re-resolve per peer per window (a spoofed/flooded hint
@@ -40,7 +40,7 @@ const RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // the sender can only help 
 const TICK_MS = 15_000;
 
 // Serialize recovery work per peer: a request-response rides a SINGLE recovery session address per peer
-// (secretSession.recAddr), and two overlapping async handlers (e.g. a retry's response arriving mid-apply)
+// and two overlapping async handlers (e.g. a retry's response arriving mid-apply)
 // would race on that session's store state. Chain per peer so each apply/respond runs to completion first.
 const peerChains = new Map<string, Promise<unknown>>();
 function withPeerLock<T>(peer: string, fn: () => Promise<T>): Promise<T> {
@@ -113,6 +113,8 @@ export const e2eeRecoveryMiddleware: Middleware = (store) => {
     let wasConnected = false;
     return (next) => (action) => {
         const result = next(action);
+        // A browser has no keys: it neither asks for recovery nor answers such a request.
+        if (!secretAvailable()) return result;
         const a = action as {type?: string; payload?: unknown};
         startTimer();
 
