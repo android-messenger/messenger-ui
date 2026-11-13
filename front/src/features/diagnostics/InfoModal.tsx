@@ -1,15 +1,39 @@
 import {useEffect, useState} from "react";
-import {useSelector} from "react-redux";
+import {useDispatch, useSelector} from "react-redux";
 import {useTranslation} from "react-i18next";
-import type {RootState} from "@/store/store";
+import type {AppDispatch, RootState} from "@/store/store";
 import {appVersion, buildTime, getLoginAt, connectsInLast, connectBuckets} from "@/shared/diag/diag.ts";
 import {mediaStats} from "@/features/chat/db/db.ts";
 import {cryptoStats, type CryptoStats} from "@/features/e2ee";
 import {wipeAllStorage} from "./wipeStorage.ts";
 import {canInstall, isStandalone, promptInstall} from "@/shared/pwa/installPrompt.ts";
+import {appSettings, deviceTrust, isNativeApp} from "@/shared/platform.ts";
+import {fullLogout, goLoginAfterLogout} from "@/features/auth/model/services/fullLogout.ts";
 
 // Diagnostics / info page (modal): app identity, storage usage, encryption state, connection health.
-// All numbers are read on open; nothing here changes state.
+// All numbers are read on open. The one action is "erase everything": it signs out and erases the device.
+
+/** What the Android app tells about itself: the APK version, the device certificate, where the keys are kept. */
+interface AppInfo { version?: string; certState?: string; certUntil?: number; keyStore?: string; patch?: string }
+
+async function readAppInfo(): Promise<AppInfo> {
+    const info: AppInfo = {};
+    try {
+        const v = await appSettings().getAppInfo?.();
+        if (v) info.version = `${v.versionName} (${v.versionCode})`;
+    } catch { /* an older APK: the version of the interface is shown instead */ }
+    try {
+        const s = await deviceTrust().getState();
+        info.certState = s.state;
+        if (s.notAfter) info.certUntil = Date.parse(s.notAfter) || undefined;
+    } catch { /* not shown */ }
+    try {
+        const d = await deviceTrust().getDeviceInfo();
+        info.keyStore = d.securityLevel ?? (d.strongBox ? "StrongBox" : undefined);
+        info.patch = d.securityPatch;
+    } catch { /* not shown */ }
+    return info;
+}
 
 function fmtBytes(n: number): string {
     if (!n) return "0 B";
@@ -77,6 +101,9 @@ function Section({title, children}: {title: string; children: React.ReactNode}) 
 export function InfoModal({onClose}: {onClose: () => void}) {
     const {t, i18n} = useTranslation();
     const locale = i18n.language || "en";
+    const dispatch = useDispatch<AppDispatch>();
+    const inApp = isNativeApp();
+    const [app, setApp] = useState<AppInfo>({});
     const userId = useSelector((s: RootState) => s.user.id);
     const wsStatus = useSelector((s: RootState) => s.ws?.status ?? "—");
 
@@ -92,9 +119,11 @@ export function InfoModal({onClose}: {onClose: () => void}) {
     const doInstall = async () => { await promptInstall(); setInstallable(canInstall()); };
     const doWipe = async () => {
         setWiping(true);
+        // Sign out first: the push registration, the keys in the Android app's library, its record in the key
+        // directory and the session go too — erasing the interface's storage alone would leave all of them.
+        await fullLogout(dispatch);
         await wipeAllStorage();
-        // Hard reload: a fresh boot with nothing stored.
-        window.location.reload();
+        goLoginAfterLogout();   // a full page load: nothing stays in memory
     };
 
     useEffect(() => {
@@ -107,9 +136,10 @@ export function InfoModal({onClose}: {onClose: () => void}) {
             } catch { /* ignore */ }
             void mediaStats().then((m) => alive && setMedia(m));
             void cryptoStats().then((c) => alive && setCrypto(c));
+            if (inApp) void readAppInfo().then((a) => alive && setApp(a));
         })();
         return () => { alive = false; };
-    }, []);
+    }, [inApp]);
 
     const usagePct = store && store.quota ? Math.min(100, (store.usage / store.quota) * 100) : 0;
 
@@ -119,12 +149,22 @@ export function InfoModal({onClose}: {onClose: () => void}) {
                 <h3 className="text-lg font-semibold mb-4">ℹ️ {t("info.title")}</h3>
 
                 <Section title={t("info.general")}>
-                    <Row label={t("info.version")} value={`${appVersion}`} mono/>
-                    <Row label={t("info.build")} value={fmtWhen(buildTime ? Date.parse(buildTime) : 0, locale)}/>
+                    {/* In the app the version is the APK's; the interface inside it has only its build time. */}
+                    <Row label={t("info.version")} value={inApp ? (app.version ?? "…") : `${appVersion}`} mono/>
+                    <Row label={t(inApp ? "info.uiBuild" : "info.build")} value={fmtWhen(buildTime ? Date.parse(buildTime) : 0, locale)}/>
                     <Row label={t("info.loginAt")} value={fmtWhen(getLoginAt(), locale)}/>
                     <Row label={t("info.userId")} value={userId ? userId.slice(0, 8) + "…" : "—"} mono/>
                     <Row label={t("info.locale")} value={locale}/>
                 </Section>
+
+                {inApp && (
+                    <Section title={t("info.device")}>
+                        <Row label={t("info.certState")} value={app.certState ?? "…"} mono/>
+                        <Row label={t("info.certUntil")} value={fmtWhen(app.certUntil ?? 0, locale)}/>
+                        <Row label={t("info.keyStore")} value={app.keyStore ?? "—"} mono/>
+                        <Row label={t("info.securityPatch")} value={app.patch ?? "—"} mono/>
+                    </Section>
+                )}
 
                 <Section title={t("info.storage")}>
                     <div className="flex justify-between text-sm pt-1"><span className="text-teal-700">{t("info.used")}</span>
@@ -154,7 +194,7 @@ export function InfoModal({onClose}: {onClose: () => void}) {
                     </div>
                 </Section>
 
-                <Section title={t("info.install")}>
+                {!inApp && <Section title={t("info.install")}>
                     {installed ? (
                         <div className="py-1.5 text-sm text-teal-700">✓ {t("info.installed")}</div>
                     ) : installable ? (
@@ -168,7 +208,7 @@ export function InfoModal({onClose}: {onClose: () => void}) {
                             <div>{t("info.installHintOther")}</div>
                         </div>
                     )}
-                </Section>
+                </Section>}
 
                 <Section title={t("info.dangerZone")}>
                     {!confirmWipe ? (
