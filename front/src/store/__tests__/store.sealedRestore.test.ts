@@ -18,7 +18,8 @@ async function start() {
     const drafts = await import("@/features/chat/model/drafts");
     const secret = await import("@/features/chat/model/slices/secretChatsSlice");
     const outbox = await import("@/features/chat/model/slices/outboxSlice");
-    return {configureAppStore, hydrateStore, db, drafts, secret, outbox};
+    const lists = await import("@/features/chat/model/sealedLists.ts");
+    return {configureAppStore, hydrateStore, db, drafts, secret, outbox, lists};
 }
 
 describe("startup restore of the sealed lists (Android app)", () => {
@@ -79,10 +80,13 @@ describe("startup restore of the sealed lists (Android app)", () => {
         const store = n.configureAppStore(webrtc);
         await n.hydrateStore(store);                      // returns although the Vault is closed
         store.dispatch(n.secret.markSecret("c-new"));
+        // Not the whole list: "c-old" is still under the Vault, so nothing is sent yet (sealedLists.ts).
         expect(store.getState().secretChats.byId).toEqual({"c-new": true});
+        expect(n.lists.listsReady()).toBe(false);
 
         locked = false;
         await vi.waitFor(() => expect(store.getState().secretChats.byId).toEqual({"c-old": true, "c-new": true}), {timeout: 6000, interval: 200});
         await vi.waitFor(async () => expect(await n.db.kvGet(n.db.KV.secretChats)).toEqual({"c-old": true, "c-new": true}), {timeout: 3000});
+        expect(n.lists.listsReady()).toBe(true);
     }, 12_000);
 });

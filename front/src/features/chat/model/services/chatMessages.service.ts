@@ -9,6 +9,7 @@ import {preserveSelectedConversation} from "@/features/chat/model/preserveSelect
 import {secretCrypto, savePlaintext, deletePlaintextForChat} from "@/features/e2ee";
 import {sendFailureKey} from "@/features/e2ee/wire.ts";
 import {deleteChatCache} from "@/features/chat/db/db.ts";
+import {listsReady, LISTS_NOT_READY_KEY} from "@/features/chat/model/sealedLists.ts";
 import toast from "react-hot-toast";
 import i18n from "@/shared/i18n";
 
@@ -84,6 +85,14 @@ export const chatMessagesService = {
         // No recipientId requirement: a GROUP send carries an empty recipientId (the server fans out to
         // the roster by conversationId). A 1:1 still passes its counterpart, so nothing changes there.
         if (!conversationId || !text.trim()) return;
+
+        // Android app: until the list of secret chats is read from its sealed record, whether this chat is
+        // secret is not known — `secret` from the caller would be false for every chat. Nothing is queued.
+        // Every text send (typed, forwarded) comes through here.
+        if (!listsReady()) {
+            toast.error(i18n.t(LISTS_NOT_READY_KEY));
+            return;
+        }
 
         // Idempotency guard against a double-fire of a single user action: Enter AND the Send button
         // both call sendMessage with the same text, and event jitter / double-taps repeat it — each

@@ -7,6 +7,7 @@ import type {AppDispatch, RootState} from "@/store/store";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {buildTypingIn} from "@/features/chat/model/schema/wireMessage.schema.ts";
 import {loadDraft, saveDraft, clearDraft} from "@/features/chat/model/drafts.ts";
+import {listsReady, LISTS_NOT_READY_KEY} from "@/features/chat/model/sealedLists.ts";
 import {logger} from "@/shared/logger/logger.ts";
 
 type ComposerSummary = {counterpartId: string; orderId?: string} | null | undefined;
@@ -49,6 +50,8 @@ export function useMessageComposer(params: {
 
     const sendMessage = useCallback((text: string) => {
         if (!selectedChatId || !text.trim()) return;
+        // Not sent before the list of secret chats is read (sealedLists.ts). The typed text stays in the field.
+        if (!listsReady()) { toast.error(t(LISTS_NOT_READY_KEY)); return; }
         const summary = getSummary(selectedChatId);
         if (!summary) {
             // Don't fail silently: if we can't resolve the conversation we can't send. Log it and
@@ -72,6 +75,7 @@ export function useMessageComposer(params: {
     // re-upload/re-encryption (deferred). The target may be any conversation, not the open one.
     const forwardMessage = useCallback((targetChatId: string, text: string) => {
         if (!targetChatId || !text.trim()) return;
+        if (!listsReady()) { toast.error(t(LISTS_NOT_READY_KEY)); return; }
         const summary = getSummary(targetChatId);
         if (!summary) {
             logger.warn("forwardMessage: no summary for target chat", {targetChatId});

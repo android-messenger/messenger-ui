@@ -21,8 +21,9 @@ import { authErrorListener } from "@/features/auth/middleware/authErrorMiddlewar
 import { e2eeRecoveryMiddleware, finishPendingE2eeWipe } from "@/features/e2ee";
 
 // DB functions
-import { loadOutboxFromDB, saveOutboxToDB, scrubHistoryCache, dropOpenCache, kvGet, KV, type KvName } from "@/features/chat/db/db";
-import { sealing } from "@/features/chat/db/sealed.ts";
+import { loadOutboxFromDB, readOutbox, saveOutboxToDB, scrubHistoryCache, dropOpenCache, kvRead, KV } from "@/features/chat/db/db";
+import { sealing, type Read } from "@/features/chat/db/sealed.ts";
+import { listsReady, setListsReady } from "@/features/chat/model/sealedLists.ts";
 import { E2EE_LS } from "@/features/e2ee/wire.ts";
 import { sweepRenamedStores } from "@/shared/storage/renamedStores.ts";
 import { chatApi } from "@/features/chat/rest/chatApi.ts";
@@ -33,12 +34,13 @@ import { kratos } from "@/features/auth";
 import { selectCallConversationId } from "@/features/chat/model/directDirectory.ts";
 
 // Android app: the send queue, the lists of sticky and secret chats and the drafts are sealed records,
-// read after the phone is unlocked (restoreSealed). Until then none of them is written: a change made in
-// the first second must not replace what is stored. In a browser they are read at once.
-let listsRestored = !sealing();
+// read after the phone is unlocked (restoreSealed). Until then none of them is written and nothing is
+// sent (model/sealedLists.ts). In a browser they are read at once.
+let restoreRun = 0;   // a new store, or a new restore, ends the retries of the one before
 
 export function configureAppStore(webRTCService: WebRTCService) {
-    listsRestored = !sealing();
+    restoreRun++;
+    setListsReady(!sealing());
     const store = configureStore({
         reducer: {
             call: callReducer,
@@ -83,7 +85,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
     // so coalesce a burst of outbox changes (enqueue → sending → sent) into one write.
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
     store.subscribe(() => {
-        if (!listsRestored) return;
+        if (!listsReady()) return;
         const s = store.getState().outbox;
         if (s.outboxVersion === s.persistedVersion || saveTimer) return;
         saveTimer = setTimeout(() => {
@@ -102,7 +104,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
     // reference only on an actual change, so this writes just on remember/forget/clear).
     let lastSticky = store.getState().stickyChats.byId;
     store.subscribe(() => {
-        if (!listsRestored) return;
+        if (!listsReady()) return;
         const cur = store.getState().stickyChats.byId;
         if (cur !== lastSticky) { lastSticky = cur; saveStickyChats(cur); }
     });
@@ -110,7 +112,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
     // Persist the secret-chat set the same way (survives reloads).
     let lastSecret = store.getState().secretChats.byId;
     store.subscribe(() => {
-        if (!listsRestored) return;
+        if (!listsReady()) return;
         const cur = store.getState().secretChats.byId;
         if (cur !== lastSecret) {
             // A chat that just became secret must not keep a draft in localStorage.
@@ -159,9 +161,26 @@ export async function hydrateStore(store: ReturnType<typeof configureAppStore>) 
     }
 }
 
-/** A sealed record, or — once, after the update from a build that used localStorage — the value left there. */
-async function sealedOrLocal<T>(name: KvName, localKey: string): Promise<T | null> {
-    let value: T | null = await kvGet<T>(name, {wait: true});
+/** How long to wait before the sealed lists are read again after a read that did not succeed. */
+export const RESTORE_RETRY_MS = 2_000;
+
+/** Resolves after RESTORE_RETRY_MS, or sooner when the app comes back to the screen. */
+function retryPause(): Promise<void> {
+    return new Promise<void>((resolve) => {
+        const done = () => {
+            clearTimeout(timer);
+            document.removeEventListener("visibilitychange", onVisible);
+            resolve();
+        };
+        const onVisible = () => { if (document.visibilityState === "visible") done(); };
+        const timer = setTimeout(done, RESTORE_RETRY_MS);
+        document.addEventListener("visibilitychange", onVisible);
+    });
+}
+
+/** The value read, or — once, after the update from a build that used localStorage — the value left there. */
+function valueOrLocal<T>(read: Read<T>, localKey: string): T | null {
+    let value: T | null = read.state === "ok" ? read.value : null;
     try {
         const raw = localStorage.getItem(localKey);
         if (raw !== null) {
@@ -172,25 +191,36 @@ async function sealedOrLocal<T>(name: KvName, localKey: string): Promise<T | nul
     return value;
 }
 
+/**
+ * Reads the four sealed records into the store, then lets the app send and write them (setListsReady).
+ * A locked phone is waited out inside the read. A read that did not succeed for another reason (the app
+ * did not answer, the Vault is closed by the app's check, a storage error) is repeated — on return to the
+ * screen and every RESTORE_RETRY_MS — and until then nothing is sent and nothing stored is replaced.
+ * A record whose key is lost for good counts as empty (owner's decision 2026-11-13: every chat is then
+ * not secret; the user turns the mode on again).
+ */
 async function restoreSealed(store: ReturnType<typeof configureAppStore>): Promise<void> {
-    try {
+    const run = ++restoreRun;
+    for (;;) {
         const [outbox, secret, sticky, drafts] = await Promise.all([
-            loadOutboxFromDB(),
-            sealedOrLocal<SecretChats>(KV.secretChats, E2EE_LS.secretChats),
-            sealedOrLocal<Record<string, ChatSummary>>(KV.stickyChats, STICKY_KEY),
-            sealedOrLocal<Record<string, string>>(KV.drafts, DRAFTS_KEY),
+            readOutbox(),
+            kvRead<SecretChats>(KV.secretChats, {wait: true}),
+            kvRead<Record<string, ChatSummary>>(KV.stickyChats, {wait: true}),
+            kvRead<Record<string, string>>(KV.drafts, {wait: true}),
         ]);
-        hydrateDrafts(drafts);
-        listsRestored = true;   // from here the subscribers write: the dispatches below save what was merged
-        if (outbox) store.dispatch(mergeOutbox(outbox));
-        store.dispatch(hydrateSecretChats(secret));
-        store.dispatch(hydrateSticky(sticky));
-        const byId = store.getState().secretChats.byId;
-        dropPersistedDrafts(Object.keys(byId).filter((id) => byId[id]));
-    } catch {
-        // The key did not come (sign-out while the phone was locked, no Vault): work from memory.
-        hydrateDrafts(null);
-        listsRestored = true;
-        store.dispatch(hydrateSticky(null));   // any action: the subscribers save what was queued meanwhile
+        if (run !== restoreRun) return;
+        if ([outbox, secret, sticky, drafts].every((r) => r.state !== "unread")) {
+            // What an earlier build kept in localStorage is taken only now: a retry must find it again.
+            hydrateDrafts(valueOrLocal(drafts, DRAFTS_KEY));
+            setListsReady(true);   // from here the subscribers write: the dispatches below save what was merged
+            if (outbox.state === "ok") store.dispatch(mergeOutbox(outbox.value));
+            store.dispatch(hydrateSecretChats(valueOrLocal(secret, E2EE_LS.secretChats)));
+            store.dispatch(hydrateSticky(valueOrLocal(sticky, STICKY_KEY)));
+            const byId = store.getState().secretChats.byId;
+            dropPersistedDrafts(Object.keys(byId).filter((id) => byId[id]));
+            return;
+        }
+        await retryPause();
+        if (run !== restoreRun) return;
     }
 }
