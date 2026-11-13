@@ -130,6 +130,8 @@
     "encryptedMessage": "🔒 Mensaje cifrado",
     "encryptFailed": "No se pudo cifrar — mensaje no enviado",
     "storageNotReady": "El almacenamiento protegido aún no está abierto — desbloquea el teléfono e inténtalo de nuevo",
+    "missedCall": "Llamada perdida",
+    "missedVideoCall": "Videollamada perdida",
     "secretChat": "Chat secreto",
     "secretOn": "Cifrado de extremo a extremo",
     "secretEnableTitle": "Activar chat secreto (cifrado de extremo a extremo)",

@@ -1,3 +1,4 @@
+import {useMissedCallNote} from "@/features/chat/hooks/useMissedCallNote.ts";
 import {useCallback, useMemo, useState, useEffect, useRef} from "react";
 import {useDispatch, useSelector} from "react-redux";
 import {setSelectedChatId} from "@/features/chat/model/slices/chatUiSlice";
@@ -40,6 +41,8 @@ export function useChat() {
        Contacts (chat list from GET /api/chats)
     ====================== */
     const {contacts, summaries, getContactById, getSummary, isLoadingIds, isErrorIds} = useContacts();
+    // An outgoing call that was not answered leaves a line in the chat.
+    useMissedCallNote({myId, getSummary});
 
     // One-shot orphan cache sweep: once the authoritative chat list has loaded (logged in, settled, no
     // error), purge locally-cached history / attachment blobs / secret plaintext for conversations that no

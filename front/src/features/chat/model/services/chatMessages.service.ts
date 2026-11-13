@@ -80,7 +80,8 @@ export const chatMessagesService = {
         conversationId: string | null,
         recipientId: string,
         orderId?: string,
-        secret = false
+        secret = false,
+        meta?: Record<string, string>,
     ) {
         // No recipientId requirement: a GROUP send carries an empty recipientId (the server fans out to
         // the roster by conversationId). A 1:1 still passes its counterpart, so nothing changes there.
@@ -133,7 +134,7 @@ export const chatMessagesService = {
 
         // The wire carries `wireText` (ciphertext for a secret chat); the optimistic echo below keeps the
         // PLAINTEXT so the sender sees what they typed.
-        const outboxMsg = toOutboxMessage({conversationId, recipientId, text: wireText, orderId});
+        const outboxMsg = toOutboxMessage({conversationId, recipientId, text: wireText, orderId, meta});
         // At-rest: the wire carries ciphertext encrypted to the PEER (not to us), so we can't read our OWN
         // sent secret message back from reloaded history. Stash our plaintext under the client id (the row's
         // correlationId after a reload) so history rendering can restore it.
@@ -165,6 +166,7 @@ export const chatMessagesService = {
             createdAt: new Date(),
             status: "sent" as const,
             secret: secret && !!recipientId,   // 🔒 marker on my own secret messages
+            ...(meta ? {meta} : {}),
         };
         dispatch(
             chatApi.util.updateQueryData(

@@ -8,6 +8,8 @@ type SendChatMessageCommand = {
     recipientId: string;
     text: string;
     orderId?: string;
+    /** Extra marks carried next to the text (e.g. `call: "missed"`). */
+    meta?: Record<string, string>;
 };
 
 export function toChatMessageView(
@@ -48,7 +50,8 @@ export function wireToChatMessage(m: WireMessage): ChatMessage {
 /** A queued outgoing chat message: the CHAT_IN frame plus its client messageId (= outbox id). */
 export function toOutboxMessage(cmd: SendChatMessageCommand): OutboxMessage {
     const messageId = nanoid();
-    const meta = cmd.orderId ? { orderId: cmd.orderId } : undefined;
+    const marks = {...(cmd.meta ?? {}), ...(cmd.orderId ? { orderId: cmd.orderId } : {})};
+    const meta = Object.keys(marks).length ? marks : undefined;
     return {
         id: messageId,
         idempotencyKey: messageId,
