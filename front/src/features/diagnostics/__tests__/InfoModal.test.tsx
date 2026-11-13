@@ -13,11 +13,11 @@ vi.mock("@/shared/diag/diag.ts", () => ({
 }));
 
 const order: string[] = [];
-const fullLogout = vi.fn(async () => { order.push("logout"); });
 const goLogin = vi.fn(() => { order.push("login page"); });
-vi.mock("@/features/auth/model/services/fullLogout.ts", () => ({fullLogout: () => fullLogout(), goLoginAfterLogout: () => goLogin()}));
-const wipeAllStorage = vi.fn(async () => { order.push("wipe"); });
-vi.mock("../wipeStorage.ts", () => ({wipeAllStorage: () => wipeAllStorage()}));
+vi.mock("@/features/auth/model/services/fullLogout.ts", () => ({goLoginAfterLogout: () => goLogin()}));
+// The erase itself (the device first, then the sign-out, then the rest) is tested in src/__audit__/eraseOrder.
+const wipeAllStorage = vi.fn(async () => { order.push("erase"); });
+vi.mock("../eraseEverything.ts", () => ({eraseEverything: () => wipeAllStorage()}));
 
 const pwa = {canInstall: vi.fn(() => false), isStandalone: vi.fn(() => false), promptInstall: vi.fn(async () => true)};
 vi.mock("@/shared/pwa/installPrompt.ts", () => ({
@@ -44,8 +44,8 @@ describe("InfoModal — install + wipe", () => {
         // Confirm → wipe runs.
         fireEvent.click(screen.getByText("info.wipeConfirm"));
         await waitFor(() => expect(goLogin).toHaveBeenCalledTimes(1));
-        // signs out (keys in the app, push, session) BEFORE the storage is erased, then leaves for the login page
-        expect(order).toEqual(["logout", "wipe", "login page"]);
+        // erases and signs out, then leaves for the login page
+        expect(order).toEqual(["erase", "login page"]);
     });
 
     it("in the Android app: the APK version and the device certificate are shown, the PWA install block is not", async () => {

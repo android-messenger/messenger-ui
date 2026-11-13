@@ -53,6 +53,8 @@ const stickyChatsSlice = createSlice({
             delete state.byId[action.payload];
         },
         /** Android app, startup: the set read from the sealed record. What changed meanwhile wins. */
+        /** Another account's list was found on this device: drop it. */
+        clearSticky(state) { state.byId = {}; },
         hydrateSticky(state, action: PayloadAction<Record<string, ChatSummary> | null>) {
             state.byId = {...(action.payload ?? {}), ...state.byId};
         },
@@ -62,5 +64,5 @@ const stickyChatsSlice = createSlice({
     },
 });
 
-export const {rememberSticky, forgetSticky, hydrateSticky} = stickyChatsSlice.actions;
+export const {rememberSticky, forgetSticky, hydrateSticky, clearSticky} = stickyChatsSlice.actions;
 export default stickyChatsSlice.reducer;

@@ -77,10 +77,15 @@ export function clearDraft(chatId: string): void {
     saveDraft(chatId, "");
 }
 
-/** Android app, startup: the drafts read from the sealed record. What was typed meanwhile wins. */
-export function hydrateDrafts(saved: Record<string, string> | null): void {
+/**
+ * Android app, startup: the drafts read from the sealed record. What was typed meanwhile wins.
+ * `store` — write the result back at once: the drafts came from an earlier build's localStorage, which is
+ * erased, so without this they would be lost on the next start.
+ */
+export function hydrateDrafts(saved: Record<string, string> | null, opts?: {store?: boolean}): void {
     appMap = {...(saved ?? {}), ...appMap};
     appReady = true;
+    if (opts?.store) write(appMap);
 }
 
 export function clearAllDrafts(): void {

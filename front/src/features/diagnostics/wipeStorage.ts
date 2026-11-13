@@ -38,6 +38,14 @@ async function listDbNames(): Promise<string[]> {
     } catch { return KNOWN_DBS; }
 }
 
+/** Set when "Erase everything" starts; gone with localStorage when wipeAllStorage ends. Not user data. */
+export const ERASE_PENDING_KEY = "wolp.erasePending";
+
+/** True while an "Erase everything" was started and not finished: the next start finishes it. */
+export function erasePending(): boolean {
+    try { return localStorage.getItem(ERASE_PENDING_KEY) !== null; } catch { return false; }
+}
+
 /** Erase every client-side store this app uses. Best-effort; never throws. Hard-reload afterwards. */
 export async function wipeAllStorage(): Promise<void> {
     try { await Promise.all((await listDbNames()).map(deleteDb)); }
