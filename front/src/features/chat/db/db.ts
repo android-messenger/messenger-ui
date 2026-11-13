@@ -8,18 +8,18 @@ import {ATTACHMENT_CACHE_MAX_BYTES} from "@/shared/config/chat.ts";
 import type {OutboxState} from "@/features/chat/model/types";
 import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 import {isSecretEnvelope} from "@/features/e2ee/wire.ts";
-import {blobFromDisk, blobToDisk, forgetCacheKey, fromDisk, sealing, storedBytes, toDisk} from "./sealed.ts";
+import {fromDisk, sealing, toDisk} from "./sealed.ts";
 
-// In the Android app every record below is sealed with the cache key (sealed.ts): what is on disk is
-// ciphertext. In a browser the records are stored in the clear, as before. `place` binds a sealed record
-// to its store and key.
+// In the Android app the records that hold text — the send queue, the history, the small values — are
+// sealed by the app's Vault (sealed.ts): what is on disk is ciphertext. Attachment files are not encrypted
+// (owner's decision 2026-11-13). In a browser everything is stored in the clear, as before. `place` binds
+// a sealed record to its store and key.
 const OUTBOX_PLACE = "outbox";
-const INDEX_PLACE = "attachment-index";
+const INDEX_PLACE = "attachment-index";   // not sealed: only the name of its write queue
 const historyPlace = (chatId: string) => `history|${chatId}`;
-const blobPlace = (attachmentId: string) => `attachment|${attachmentId}`;
 const kvPlace = (name: string) => `kv|${name}`;
 
-// Sealing is asynchronous, so two writes of one record started one after the other could reach the disk
+// Sealing is a call to the app, so two writes of one record started one after the other could reach the disk
 // in the other order — the older value over the newer. Writes of one place run one at a time, in the
 // order they were asked for.
 const writes = new Map<string, Promise<unknown>>();
@@ -94,7 +94,7 @@ export async function loadOutboxFromDB(): Promise<OutboxState | null> {
 // on-disk copy of a secret message's text is the wrapped one in `e2ee-plaintext` (features/e2ee/lib/atRest);
 // after a restart the rows come from the server and the text is restored from there. The rule lives in
 // this one place so every present and future caller of saveHistoryToDB is covered. A read never waits
-// for a locked phone longer than KEY_WAIT_MS (sealed.ts): it answers "nothing cached".
+// for a locked phone longer than VAULT_WAIT_MS (sealed.ts): it answers "nothing cached".
 
 /** A row that must not be written to disk: decrypted in memory (`secret`) or still an E2EE envelope. */
 export function isSecretRow(m: Pick<ChatMessage, "secret" | "text">): boolean {
@@ -176,22 +176,20 @@ export function evictToFit(entries: CacheIndexEntry[], maxBytes: number): {kept:
 }
 
 async function readCacheIndex(db: IDBPDatabase<unknown>): Promise<CacheIndexEntry[]> {
-    const index = await fromDisk<CacheIndexEntry[]>(await db.get(ATTACHMENT_INDEX_STORE, ATTACHMENT_INDEX_KEY), INDEX_PLACE);
-    return Array.isArray(index) ? index : [];
+    const index = await db.get(ATTACHMENT_INDEX_STORE, ATTACHMENT_INDEX_KEY);
+    return Array.isArray(index) ? index as CacheIndexEntry[] : [];
 }
 
 async function writeCacheIndex(db: IDBPDatabase<unknown>, index: CacheIndexEntry[]): Promise<void> {
-    const rec = await toDisk(index, INDEX_PLACE);
-    await db.put(ATTACHMENT_INDEX_STORE, rec, ATTACHMENT_INDEX_KEY);
+    await db.put(ATTACHMENT_INDEX_STORE, index, ATTACHMENT_INDEX_KEY);
 }
 
 export async function saveAttachmentBlob(attachmentId: string, blob: Blob) {
     if (!attachmentId || !blob) return;
     const db = await initDB();
-    const rec = await blobToDisk(blob, blobPlace(attachmentId));
     // The index is read, changed and written back: one such change at a time.
     await inOrder(INDEX_PLACE, async () => {
-        await db.put(ATTACHMENT_BLOB_STORE, rec, attachmentId);
+        await db.put(ATTACHMENT_BLOB_STORE, blob, attachmentId);
         const index = await readCacheIndex(db);
         const next = [...index.filter((e) => e.id !== attachmentId), {id: attachmentId, size: blob.size || 0}];
         const {kept, evicted} = evictToFit(next, ATTACHMENT_CACHE_MAX_BYTES);
@@ -203,8 +201,8 @@ export async function saveAttachmentBlob(attachmentId: string, blob: Blob) {
 export async function loadAttachmentBlob(attachmentId: string): Promise<Blob | null> {
     if (!attachmentId) return null;
     const db = await initDB();
-    const result = await blobFromDisk(await db.get(ATTACHMENT_BLOB_STORE, attachmentId), blobPlace(attachmentId));
-    return result ?? null;
+    const result = await db.get(ATTACHMENT_BLOB_STORE, attachmentId);
+    return (result as Blob) ?? null;
 }
 
 // Drop one cached attachment (its message was deleted, or the blob was stale/corrupt) — blob + index.
@@ -228,7 +226,6 @@ export async function clearAllLocalData() {
         db.clear(STORE_NAME), db.clear(HISTORY_STORE_NAME),
         db.clear(ATTACHMENT_BLOB_STORE), db.clear(ATTACHMENT_INDEX_STORE), db.clear(KV_STORE_NAME),
     ]);
-    await forgetCacheKey();   // the next account gets its own key
 }
 
 /** Storage breakdown for the info page: attachment files (count + bytes) and cached history (chats + msgs). */
@@ -237,7 +234,7 @@ export async function mediaStats(): Promise<{files: number; fileBytes: number; c
         const db = await initDB();
         const blobs = (await db.getAll(ATTACHMENT_BLOB_STORE)) as unknown[];
         let fileBytes = 0;
-        for (const b of blobs) fileBytes += storedBytes(b);
+        for (const b of blobs) fileBytes += b instanceof Blob ? b.size : ((b as {byteLength?: number})?.byteLength ?? 0);
         const chatIds = (await db.getAllKeys(HISTORY_STORE_NAME)) as string[];
         let messages = 0;
         for (const chatId of chatIds) {
@@ -317,20 +314,17 @@ export async function kvSet(name: KvName, value: unknown): Promise<void> {
     });
 }
 
-// A build before 10097 stored the history and the attachments in the clear. They are a cache: erased once,
-// not converted (the send queue is converted — see loadOutboxFromDB). The mark is not user data.
+// A build before 10097 stored the history in the clear. It is a cache: erased once, not converted (the send queue is converted — see loadOutboxFromDB). The mark is not user data.
 const SEALED_MARK = "wolp.cacheSealed";
 const OPEN_NAMES_DB = "wolp-names";
 
-/** Android app, once after the update: erase what an earlier build left on disk in the clear. Best-effort. */
+/** Android app, once after the update: erase the text an earlier build left on disk in the clear. Best-effort. */
 export async function dropOpenCache(): Promise<void> {
     if (!sealing()) return;
     try {
         if (localStorage.getItem(SEALED_MARK) === "1") return;
         const db = await initDB();
-        await Promise.all([
-            db.clear(HISTORY_STORE_NAME), db.clear(ATTACHMENT_BLOB_STORE), db.clear(ATTACHMENT_INDEX_STORE),
-        ]);
+        await db.clear(HISTORY_STORE_NAME);
         await new Promise<void>((resolve) => {
             const req = indexedDB.deleteDatabase(OPEN_NAMES_DB);
             req.onsuccess = req.onerror = req.onblocked = () => resolve();
