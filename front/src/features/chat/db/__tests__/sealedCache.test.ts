@@ -158,6 +158,25 @@ describe("chat cache in the Android app", () => {
         await vi.waitFor(async () => expect(await m.loadHistoryFromDB("c1")).toEqual(history), {timeout: 5000, interval: 200});
     }, 10_000);
 
+    it("two writes of one record land in the order they were made, whatever the sealing takes", async () => {
+        await m.kvSet(m.KV.drafts, {c1: "warm-up"});   // the key is ready
+        const encrypt = crypto.subtle.encrypt.bind(crypto.subtle);
+        let first = true;
+        const spy = vi.spyOn(crypto.subtle, "encrypt").mockImplementation(async (...args: Parameters<typeof encrypt>) => {
+            if (first) { first = false; await new Promise((r) => setTimeout(r, 50)); }   // the older write is the slow one
+            return encrypt(...args);
+        });
+        try {
+            const older = m.kvSet(m.KV.drafts, {c1: "older"});
+            const newer = m.kvSet(m.KV.drafts, {c1: "newer"});
+            const h1 = m.saveHistoryToDB("c1", [history[0]]);
+            const h2 = m.saveHistoryToDB("c1", history);
+            await Promise.all([older, newer, h1, h2]);
+        } finally { spy.mockRestore(); }
+        expect(await m.kvGet(m.KV.drafts)).toEqual({c1: "newer"});
+        expect(await m.loadHistoryFromDB("c1")).toEqual(history);
+    });
+
     it("sign-out: the records and the key are erased, the next account gets its own key", async () => {
         await m.saveHistoryToDB("c1", history);
         await m.kvSet(m.KV.names, {u1: "Ann"});

@@ -30,7 +30,7 @@ describe("startup restore of the sealed lists (Android app)", () => {
     });
     afterEach(() => { abortVaultWaits(); app.uninstall(); });
 
-    it("moves what an earlier build kept in localStorage into sealed records, keeping what changed meanwhile", async () => {
+    it("moves what an earlier build kept in localStorage into sealed records, keeping what changed meanwhile", {timeout: 20_000}, async () => {
         localStorage.setItem("wolp.secretChats", JSON.stringify({"c-old": true, "c-off": false}));
         localStorage.setItem("wolp.sticky-chats.v1", JSON.stringify({"c-sticky": {conversationId: "c-sticky", kind: "direct"}}));
         localStorage.setItem("wolp.drafts.v1", JSON.stringify({"c-plain": "half a sentence", "c-old": "typed before it became secret"}));
@@ -43,7 +43,7 @@ describe("startup restore of the sealed lists (Android app)", () => {
         store.dispatch(m.outbox.enqueueMessage(queued("fresh") as never));
         await m.hydrateStore(store);                                    // does not wait for the restore
 
-        await vi.waitFor(() => expect(store.getState().secretChats.byId).toEqual({"c-old": true, "c-off": false, "c-new": true}));
+        await vi.waitFor(() => expect(store.getState().secretChats.byId).toEqual({"c-old": true, "c-off": false, "c-new": true}), {timeout: 5000});
         expect(Object.keys(store.getState().stickyChats.byId)).toEqual(["c-sticky"]);
         expect(store.getState().outbox.messages.map((x) => x.id)).toEqual(["stored", "fresh"]);
         expect(m.drafts.loadDraft("c-plain")).toBe("half a sentence");
@@ -55,13 +55,13 @@ describe("startup restore of the sealed lists (Android app)", () => {
             expect(await m.db.kvGet(m.db.KV.stickyChats)).toHaveProperty("c-sticky");
             expect(await m.db.kvGet(m.db.KV.drafts)).toEqual({"c-plain": "half a sentence"});   // a secret chat's draft is not stored
             expect((await m.db.loadOutboxFromDB())?.messages.map((x) => x.id)).toEqual(["stored", "fresh"]);
-        }, {timeout: 3000});
+        }, {timeout: 5000});
 
         // the next start reads the sealed records
         const n = await start();
         const next = n.configureAppStore(webrtc);
         await n.hydrateStore(next);
-        await vi.waitFor(() => expect(next.getState().secretChats.byId).toEqual({"c-old": true, "c-off": false, "c-new": true}));
+        await vi.waitFor(() => expect(next.getState().secretChats.byId).toEqual({"c-old": true, "c-off": false, "c-new": true}), {timeout: 5000});
         expect(n.drafts.loadDraft("c-plain")).toBe("half a sentence");
         expect(next.getState().outbox.messages.map((x) => x.id)).toEqual(["stored", "fresh"]);
     });

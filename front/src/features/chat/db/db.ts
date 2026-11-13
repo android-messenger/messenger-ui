@@ -19,6 +19,18 @@ const historyPlace = (chatId: string) => `history|${chatId}`;
 const blobPlace = (attachmentId: string) => `attachment|${attachmentId}`;
 const kvPlace = (name: string) => `kv|${name}`;
 
+// Sealing is asynchronous, so two writes of one record started one after the other could reach the disk
+// in the other order — the older value over the newer. Writes of one place run one at a time, in the
+// order they were asked for.
+const writes = new Map<string, Promise<unknown>>();
+function inOrder<T>(place: string, write: () => Promise<T>): Promise<T> {
+    const next = (writes.get(place) ?? Promise.resolve()).then(write, write);
+    writes.set(place, next);
+    const done = () => { if (writes.get(place) === next) writes.delete(place); };
+    next.then(done, done);
+    return next;
+}
+
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let dbPromise: Promise<IDBPDatabase<any>> | null = null;
@@ -57,8 +69,10 @@ export const initDB = async () => {
 
 export async function saveOutboxToDB(data: OutboxState) {
     const db = await initDB();
-    const rec = await toDisk(data, OUTBOX_PLACE);
-    await db.put(STORE_NAME, rec, STORE_KEY);
+    await inOrder(OUTBOX_PLACE, async () => {
+        const rec = await toDisk(data, OUTBOX_PLACE);
+        await db.put(STORE_NAME, rec, STORE_KEY);
+    });
 }
 
 export async function loadOutboxFromDB(): Promise<OutboxState | null> {
@@ -97,8 +111,10 @@ export function toDiskRows(messages: ChatMessage[]): ChatMessage[] {
 export async function saveHistoryToDB(chatId: string, messages: ChatMessage[]) {
     if (!chatId) return;
     const db = await initDB();
-    const rec = await toDisk(toDiskRows(messages), historyPlace(chatId));
-    await db.put(HISTORY_STORE_NAME, rec, chatId);
+    await inOrder(historyPlace(chatId), async () => {
+        const rec = await toDisk(toDiskRows(messages), historyPlace(chatId));
+        await db.put(HISTORY_STORE_NAME, rec, chatId);
+    });
 }
 
 export async function loadHistoryFromDB(chatId: string): Promise<ChatMessage[] | null> {
@@ -173,12 +189,15 @@ export async function saveAttachmentBlob(attachmentId: string, blob: Blob) {
     if (!attachmentId || !blob) return;
     const db = await initDB();
     const rec = await blobToDisk(blob, blobPlace(attachmentId));
-    await db.put(ATTACHMENT_BLOB_STORE, rec, attachmentId);
-    const index = await readCacheIndex(db);
-    const next = [...index.filter((e) => e.id !== attachmentId), {id: attachmentId, size: blob.size || 0}];
-    const {kept, evicted} = evictToFit(next, ATTACHMENT_CACHE_MAX_BYTES);
-    for (const id of evicted) await db.delete(ATTACHMENT_BLOB_STORE, id);
-    await writeCacheIndex(db, kept);
+    // The index is read, changed and written back: one such change at a time.
+    await inOrder(INDEX_PLACE, async () => {
+        await db.put(ATTACHMENT_BLOB_STORE, rec, attachmentId);
+        const index = await readCacheIndex(db);
+        const next = [...index.filter((e) => e.id !== attachmentId), {id: attachmentId, size: blob.size || 0}];
+        const {kept, evicted} = evictToFit(next, ATTACHMENT_CACHE_MAX_BYTES);
+        for (const id of evicted) await db.delete(ATTACHMENT_BLOB_STORE, id);
+        await writeCacheIndex(db, kept);
+    });
 }
 
 export async function loadAttachmentBlob(attachmentId: string): Promise<Blob | null> {
@@ -192,11 +211,13 @@ export async function loadAttachmentBlob(attachmentId: string): Promise<Blob | n
 export async function deleteAttachmentBlob(attachmentId: string) {
     if (!attachmentId) return;
     const db = await initDB();
-    await db.delete(ATTACHMENT_BLOB_STORE, attachmentId);
-    const index = await readCacheIndex(db);
-    if (index.some((e) => e.id === attachmentId)) {
-        await writeCacheIndex(db, index.filter((e) => e.id !== attachmentId));
-    }
+    await inOrder(INDEX_PLACE, async () => {
+        await db.delete(ATTACHMENT_BLOB_STORE, attachmentId);
+        const index = await readCacheIndex(db);
+        if (index.some((e) => e.id === attachmentId)) {
+            await writeCacheIndex(db, index.filter((e) => e.id !== attachmentId));
+        }
+    });
 }
 
 // Wipe all locally-cached user data (outbox queue + per-conversation history + media cache). Called on
@@ -290,8 +311,10 @@ export async function kvGet<T>(name: KvName, opts?: {wait?: boolean}): Promise<T
 export async function kvSet(name: KvName, value: unknown): Promise<void> {
     if (!sealing()) return;   // a browser keeps these in localStorage
     const db = await initDB();
-    const rec = await toDisk(value, kvPlace(name));
-    await db.put(KV_STORE_NAME, rec, name);
+    await inOrder(kvPlace(name), async () => {
+        const rec = await toDisk(value, kvPlace(name));
+        await db.put(KV_STORE_NAME, rec, name);
+    });
 }
 
 // A build before 10097 stored the history and the attachments in the clear. They are a cache: erased once,
