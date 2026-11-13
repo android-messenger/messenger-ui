@@ -22,6 +22,16 @@ const outboxSlice = createSlice({
             return action.payload;
         },
 
+        // Android app: the stored queue is read after the phone is unlocked, so messages may have been
+        // queued meanwhile. The stored ones go first; nothing already in the queue is replaced.
+        mergeOutbox(state, action: PayloadAction<OutboxState>) {
+            const have = new Set(state.messages.map((m) => m.id));
+            const stored = (action.payload?.messages ?? []).filter((m) => !have.has(m.id));
+            if (stored.length === 0) return;
+            state.messages = [...stored, ...state.messages];
+            state.outboxVersion = bumpVersion();
+        },
+
         enqueueMessage(state, action: PayloadAction<Omit<OutboxMessage, "status" | "attempts">>) {
             logger.debug("message added ", action.payload);
             state.messages.push({
@@ -97,6 +107,7 @@ const outboxSlice = createSlice({
 
 export const {
     hydrateOutbox,
+    mergeOutbox,
     enqueueMessage,
     markSending,
     markSent,

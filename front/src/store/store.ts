@@ -5,11 +5,12 @@ import userReducer, {clearUser} from "@/features/auth/slices/userSlice";
 import callReducer, {webrtcConnected, incomingRemoteEnd} from "@/features/call/model/slices/callSlice";
 import wsReducer from "@/infrastructure/slices/websocketSlice.ts";
 import chatUiReducer from "@/features/chat/model/slices/chatUiSlice";
-import outboxReducer, { hydrateOutbox, markPersisted } from "@/features/chat/model/slices/outboxSlice";
+import outboxReducer, { hydrateOutbox, mergeOutbox, markPersisted } from "@/features/chat/model/slices/outboxSlice";
 import presenceReducer from "@/features/presence/model/presenceSlice";
-import stickyChatsReducer, { saveStickyChats } from "@/features/chat/model/slices/stickyChatsSlice";
-import secretChatsReducer, { saveSecretChats, loadSecretChats, clearSecretChats } from "@/features/chat/model/slices/secretChatsSlice";
-import { dropPersistedDrafts } from "@/features/chat/model/drafts.ts";
+import stickyChatsReducer, { saveStickyChats, hydrateSticky, STICKY_KEY } from "@/features/chat/model/slices/stickyChatsSlice";
+import secretChatsReducer, { saveSecretChats, loadSecretChats, clearSecretChats, hydrateSecretChats, type SecretChats } from "@/features/chat/model/slices/secretChatsSlice";
+import { dropPersistedDrafts, hydrateDrafts, DRAFTS_KEY } from "@/features/chat/model/drafts.ts";
+import type { ChatSummary } from "@/entities/conversation";
 
 // Middleware
 import { createCallMiddleware } from "@/features/call/middleware/callMiddleware";
@@ -20,7 +21,9 @@ import { authErrorListener } from "@/features/auth/middleware/authErrorMiddlewar
 import { e2eeRecoveryMiddleware, finishPendingE2eeWipe } from "@/features/e2ee";
 
 // DB functions
-import { loadOutboxFromDB, saveOutboxToDB, scrubHistoryCache } from "@/features/chat/db/db";
+import { loadOutboxFromDB, saveOutboxToDB, scrubHistoryCache, dropOpenCache, kvGet, KV, type KvName } from "@/features/chat/db/db";
+import { sealing } from "@/features/chat/db/sealed.ts";
+import { E2EE_LS } from "@/features/e2ee/wire.ts";
 import { sweepRenamedStores } from "@/shared/storage/renamedStores.ts";
 import { chatApi } from "@/features/chat/rest/chatApi.ts";
 import { contactsApi } from "@/features/contacts/rest/contactsApi.ts";
@@ -29,7 +32,13 @@ import type {WebRTCService} from "@/features/call/service/webRTCService.ts";
 import { kratos } from "@/features/auth";
 import { selectCallConversationId } from "@/features/chat/model/directDirectory.ts";
 
+// Android app: the send queue, the lists of sticky and secret chats and the drafts are sealed records,
+// read after the phone is unlocked (restoreSealed). Until then none of them is written: a change made in
+// the first second must not replace what is stored. In a browser they are read at once.
+let listsRestored = !sealing();
+
 export function configureAppStore(webRTCService: WebRTCService) {
+    listsRestored = !sealing();
     const store = configureStore({
         reducer: {
             call: callReducer,
@@ -74,6 +83,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
     // so coalesce a burst of outbox changes (enqueue → sending → sent) into one write.
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
     store.subscribe(() => {
+        if (!listsRestored) return;
         const s = store.getState().outbox;
         if (s.outboxVersion === s.persistedVersion || saveTimer) return;
         saveTimer = setTimeout(() => {
@@ -83,7 +93,8 @@ export function configureAppStore(webRTCService: WebRTCService) {
             const savedVersion = cur.outboxVersion;
             // Mark the version we ACTUALLY saved — not the live one at completion time (a message
             // enqueued during the async put would otherwise be marked persisted but never written).
-            saveOutboxToDB(cur).then(() => store.dispatch(markPersisted(savedVersion)));
+            // A failed write (no key, storage error) leaves the version unmarked: the next change tries again.
+            saveOutboxToDB(cur).then(() => store.dispatch(markPersisted(savedVersion))).catch(() => {});
         }, 400);
     });
 
@@ -91,6 +102,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
     // reference only on an actual change, so this writes just on remember/forget/clear).
     let lastSticky = store.getState().stickyChats.byId;
     store.subscribe(() => {
+        if (!listsRestored) return;
         const cur = store.getState().stickyChats.byId;
         if (cur !== lastSticky) { lastSticky = cur; saveStickyChats(cur); }
     });
@@ -98,6 +110,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
     // Persist the secret-chat set the same way (survives reloads).
     let lastSecret = store.getState().secretChats.byId;
     store.subscribe(() => {
+        if (!listsRestored) return;
         const cur = store.getState().secretChats.byId;
         if (cur !== lastSecret) {
             // A chat that just became secret must not keep a draft in localStorage.
@@ -134,8 +147,50 @@ export async function hydrateStore(store: ReturnType<typeof configureAppStore>) 
     void scrubHistoryCache();
     void sweepRenamedStores();   // what a build before the rename of the stores left on the device
     dropPersistedDrafts(Object.keys(loadSecretChats()));
+    void dropOpenCache();        // Android app: the history and attachments an earlier build stored in the clear
+    // Android app: this does not hold up the start — it waits for the phone to be unlocked.
+    if (sealing()) {
+        void restoreSealed(store);
+        return;
+    }
     const saved = await loadOutboxFromDB();
     if (saved) {
         store.dispatch(hydrateOutbox(saved));
+    }
+}
+
+/** A sealed record, or — once, after the update from a build that used localStorage — the value left there. */
+async function sealedOrLocal<T>(name: KvName, localKey: string): Promise<T | null> {
+    let value: T | null = await kvGet<T>(name, {wait: true});
+    try {
+        const raw = localStorage.getItem(localKey);
+        if (raw !== null) {
+            if (value === null) value = JSON.parse(raw) as T;
+            localStorage.removeItem(localKey);
+        }
+    } catch { /* unreadable: dropped */ }
+    return value;
+}
+
+async function restoreSealed(store: ReturnType<typeof configureAppStore>): Promise<void> {
+    try {
+        const [outbox, secret, sticky, drafts] = await Promise.all([
+            loadOutboxFromDB(),
+            sealedOrLocal<SecretChats>(KV.secretChats, E2EE_LS.secretChats),
+            sealedOrLocal<Record<string, ChatSummary>>(KV.stickyChats, STICKY_KEY),
+            sealedOrLocal<Record<string, string>>(KV.drafts, DRAFTS_KEY),
+        ]);
+        hydrateDrafts(drafts);
+        listsRestored = true;   // from here the subscribers write: the dispatches below save what was merged
+        if (outbox) store.dispatch(mergeOutbox(outbox));
+        store.dispatch(hydrateSecretChats(secret));
+        store.dispatch(hydrateSticky(sticky));
+        const byId = store.getState().secretChats.byId;
+        dropPersistedDrafts(Object.keys(byId).filter((id) => byId[id]));
+    } catch {
+        // The key did not come (sign-out while the phone was locked, no Vault): work from memory.
+        hydrateDrafts(null);
+        listsRestored = true;
+        store.dispatch(hydrateSticky(null));   // any action: the subscribers save what was queued meanwhile
     }
 }

@@ -20,7 +20,7 @@ describe("secretChatsSlice", () => {
     });
 
     it("only the user's own action turns a chat back to normal", () => {
-        expect(Object.keys(slice).sort()).toEqual(["clearSecretChats", "default", "loadSecretChats", "markSecret", "saveSecretChats", "unmarkSecret"]);
+        expect(Object.keys(slice).sort()).toEqual(["clearSecretChats", "default", "hydrateSecretChats", "loadSecretChats", "markSecret", "saveSecretChats", "unmarkSecret"]);
         // The old toggle payload — what a frame from the server could be shaped like — unmarks nothing.
         const state = reducer({byId: {c1: true}}, {type: "secretChats/setSecret", payload: {conversationId: "c1", secret: false}});
         expect(state.byId).toEqual({c1: true});

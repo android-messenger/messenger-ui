@@ -6,9 +6,9 @@
 const PREFIX = "wolp";
 
 /** localStorage stores, by the part after "<prefix>.". */
-export const LOCAL_STORES = ["drafts.v1", "secretChats", "e2eeVerified", "sticky-chats.v1", "e2eeWipePending", "e2eeNativeKeys"] as const;
+export const LOCAL_STORES = ["drafts.v1", "secretChats", "e2eeVerified", "sticky-chats.v1", "e2eeWipePending", "e2eeNativeKeys", "cacheSealed"] as const;
 /** IndexedDB stores, by the part after "<prefix>-". */
-export const DB_STORES = ["names", "pending-call", "push-dedup"] as const;
+export const DB_STORES = ["names", "pending-call", "push-dedup", "cache-key"] as const;
 
 const isLeftover = (name: string, sep: string, stores: readonly string[]) =>
     stores.some((s) => name.endsWith(sep + s) && name !== PREFIX + sep + s && name.indexOf(sep) === name.length - s.length - 1);

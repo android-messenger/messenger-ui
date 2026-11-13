@@ -2,12 +2,34 @@ import {type IDBPDatabase, openDB} from 'idb';
 import {
     DB_NAME, DB_VERSION, HISTORY_STORE_NAME, STORE_KEY, STORE_NAME,
     ATTACHMENT_BLOB_STORE, ATTACHMENT_INDEX_STORE, ATTACHMENT_INDEX_KEY,
-    THUMB_STORE_NAME, THUMB_META_STORE,
+    THUMB_STORE_NAME, THUMB_META_STORE, KV_STORE_NAME,
 } from "@/shared/config/idb";
 import {ATTACHMENT_CACHE_MAX_BYTES} from "@/shared/config/chat.ts";
 import type {OutboxState} from "@/features/chat/model/types";
 import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 import {isSecretEnvelope} from "@/features/e2ee/wire.ts";
+import {blobFromDisk, blobToDisk, forgetCacheKey, fromDisk, sealing, storedBytes, toDisk} from "./sealed.ts";
+
+// In the Android app every record below is sealed with the cache key (sealed.ts): what is on disk is
+// ciphertext. In a browser the records are stored in the clear, as before. `place` binds a sealed record
+// to its store and key.
+const OUTBOX_PLACE = "outbox";
+const INDEX_PLACE = "attachment-index";
+const historyPlace = (chatId: string) => `history|${chatId}`;
+const blobPlace = (attachmentId: string) => `attachment|${attachmentId}`;
+const kvPlace = (name: string) => `kv|${name}`;
+
+// Sealing is asynchronous, so two writes of one record started one after the other could reach the disk
+// in the other order — the older value over the newer. Writes of one place run one at a time, in the
+// order they were asked for.
+const writes = new Map<string, Promise<unknown>>();
+function inOrder<T>(place: string, write: () => Promise<T>): Promise<T> {
+    const next = (writes.get(place) ?? Promise.resolve()).then(write, write);
+    writes.set(place, next);
+    const done = () => { if (writes.get(place) === next) writes.delete(place); };
+    next.then(done, done);
+    return next;
+}
 
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -35,6 +57,10 @@ export const initDB = async () => {
                 if (!db.objectStoreNames.contains(ATTACHMENT_INDEX_STORE)) {
                     db.createObjectStore(ATTACHMENT_INDEX_STORE);
                 }
+                // v6: small sealed values of the Android app (see KV below).
+                if (!db.objectStoreNames.contains(KV_STORE_NAME)) {
+                    db.createObjectStore(KV_STORE_NAME);
+                }
             },
         });
     }
@@ -43,21 +69,32 @@ export const initDB = async () => {
 
 export async function saveOutboxToDB(data: OutboxState) {
     const db = await initDB();
-    await db.put(STORE_NAME, data, STORE_KEY);
+    await inOrder(OUTBOX_PLACE, async () => {
+        const rec = await toDisk(data, OUTBOX_PLACE);
+        await db.put(STORE_NAME, rec, STORE_KEY);
+    });
 }
 
 export async function loadOutboxFromDB(): Promise<OutboxState | null> {
     const db = await initDB();
-    const result = await db.get(STORE_NAME, STORE_KEY);
-    return result ?? null;
+    const stored = await db.get(STORE_NAME, STORE_KEY);
+    // The queue holds messages the user has not sent yet: wait for the key rather than report an empty queue.
+    const result = await fromDisk<OutboxState>(stored, OUTBOX_PLACE, {wait: true});
+    if (result) return result;
+    // A queue an earlier build of the app left in the clear: keep the unsent messages, seal them now.
+    if (sealing() && stored && Array.isArray((stored as OutboxState).messages)) {
+        await saveOutboxToDB(stored as OutboxState).catch(() => { /* sealed on the next change */ });
+        return stored as OutboxState;
+    }
+    return null;
 }
 
 // --- per-conversation history cache -------------------------------------------------
 // Secret (E2EE) rows NEVER go to this store — neither the decrypted text nor the envelope. The only
 // on-disk copy of a secret message's text is the wrapped one in `e2ee-plaintext` (features/e2ee/lib/atRest);
 // after a restart the rows come from the server and the text is restored from there. The rule lives in
-// this one place so every present and future caller of saveHistoryToDB is covered. Nothing here touches
-// the device key / Vault, so a locked Vault never delays the cache.
+// this one place so every present and future caller of saveHistoryToDB is covered. A read never waits
+// for a locked phone longer than KEY_WAIT_MS (sealed.ts): it answers "nothing cached".
 
 /** A row that must not be written to disk: decrypted in memory (`secret`) or still an E2EE envelope. */
 export function isSecretRow(m: Pick<ChatMessage, "secret" | "text">): boolean {
@@ -74,22 +111,26 @@ export function toDiskRows(messages: ChatMessage[]): ChatMessage[] {
 export async function saveHistoryToDB(chatId: string, messages: ChatMessage[]) {
     if (!chatId) return;
     const db = await initDB();
-    await db.put(HISTORY_STORE_NAME, toDiskRows(messages), chatId);
+    await inOrder(historyPlace(chatId), async () => {
+        const rec = await toDisk(toDiskRows(messages), historyPlace(chatId));
+        await db.put(HISTORY_STORE_NAME, rec, chatId);
+    });
 }
 
 export async function loadHistoryFromDB(chatId: string): Promise<ChatMessage[] | null> {
     if (!chatId) return null;
     const db = await initDB();
-    const result = await db.get(HISTORY_STORE_NAME, chatId);
+    const result = await fromDisk<ChatMessage[]>(await db.get(HISTORY_STORE_NAME, chatId), historyPlace(chatId));
     // Filter on read too: a record written by an earlier client version may still hold secret rows
     // until scrubHistoryCache has passed over it.
-    return result ? toDiskRows(result as ChatMessage[]) : null;
+    return Array.isArray(result) ? toDiskRows(result) : null;
 }
 
 /**
  * Startup pass: rewrite every cached history record through toDiskRows, removing secret rows (and their
  * plaintext) left by earlier client versions. Idempotent — a clean cache is not written at all.
- * Best-effort: storage errors are swallowed. Returns how many records were rewritten.
+ * Best-effort: storage errors are swallowed. Returns how many records were rewritten. A sealed record
+ * (Android app) is not an array and is skipped: it was written through toDiskRows already.
  */
 export async function scrubHistoryCache(): Promise<number> {
     let rewritten = 0;
@@ -135,36 +176,48 @@ export function evictToFit(entries: CacheIndexEntry[], maxBytes: number): {kept:
 }
 
 async function readCacheIndex(db: IDBPDatabase<unknown>): Promise<CacheIndexEntry[]> {
-    return ((await db.get(ATTACHMENT_INDEX_STORE, ATTACHMENT_INDEX_KEY)) as CacheIndexEntry[] | undefined) ?? [];
+    const index = await fromDisk<CacheIndexEntry[]>(await db.get(ATTACHMENT_INDEX_STORE, ATTACHMENT_INDEX_KEY), INDEX_PLACE);
+    return Array.isArray(index) ? index : [];
+}
+
+async function writeCacheIndex(db: IDBPDatabase<unknown>, index: CacheIndexEntry[]): Promise<void> {
+    const rec = await toDisk(index, INDEX_PLACE);
+    await db.put(ATTACHMENT_INDEX_STORE, rec, ATTACHMENT_INDEX_KEY);
 }
 
 export async function saveAttachmentBlob(attachmentId: string, blob: Blob) {
     if (!attachmentId || !blob) return;
     const db = await initDB();
-    await db.put(ATTACHMENT_BLOB_STORE, blob, attachmentId);
-    const index = await readCacheIndex(db);
-    const next = [...index.filter((e) => e.id !== attachmentId), {id: attachmentId, size: blob.size || 0}];
-    const {kept, evicted} = evictToFit(next, ATTACHMENT_CACHE_MAX_BYTES);
-    for (const id of evicted) await db.delete(ATTACHMENT_BLOB_STORE, id);
-    await db.put(ATTACHMENT_INDEX_STORE, kept, ATTACHMENT_INDEX_KEY);
+    const rec = await blobToDisk(blob, blobPlace(attachmentId));
+    // The index is read, changed and written back: one such change at a time.
+    await inOrder(INDEX_PLACE, async () => {
+        await db.put(ATTACHMENT_BLOB_STORE, rec, attachmentId);
+        const index = await readCacheIndex(db);
+        const next = [...index.filter((e) => e.id !== attachmentId), {id: attachmentId, size: blob.size || 0}];
+        const {kept, evicted} = evictToFit(next, ATTACHMENT_CACHE_MAX_BYTES);
+        for (const id of evicted) await db.delete(ATTACHMENT_BLOB_STORE, id);
+        await writeCacheIndex(db, kept);
+    });
 }
 
 export async function loadAttachmentBlob(attachmentId: string): Promise<Blob | null> {
     if (!attachmentId) return null;
     const db = await initDB();
-    const result = await db.get(ATTACHMENT_BLOB_STORE, attachmentId);
-    return (result as Blob) ?? null;
+    const result = await blobFromDisk(await db.get(ATTACHMENT_BLOB_STORE, attachmentId), blobPlace(attachmentId));
+    return result ?? null;
 }
 
 // Drop one cached attachment (its message was deleted, or the blob was stale/corrupt) — blob + index.
 export async function deleteAttachmentBlob(attachmentId: string) {
     if (!attachmentId) return;
     const db = await initDB();
-    await db.delete(ATTACHMENT_BLOB_STORE, attachmentId);
-    const index = await readCacheIndex(db);
-    if (index.some((e) => e.id === attachmentId)) {
-        await db.put(ATTACHMENT_INDEX_STORE, index.filter((e) => e.id !== attachmentId), ATTACHMENT_INDEX_KEY);
-    }
+    await inOrder(INDEX_PLACE, async () => {
+        await db.delete(ATTACHMENT_BLOB_STORE, attachmentId);
+        const index = await readCacheIndex(db);
+        if (index.some((e) => e.id === attachmentId)) {
+            await writeCacheIndex(db, index.filter((e) => e.id !== attachmentId));
+        }
+    });
 }
 
 // Wipe all locally-cached user data (outbox queue + per-conversation history + media cache). Called on
@@ -173,8 +226,9 @@ export async function clearAllLocalData() {
     const db = await initDB();
     await Promise.all([
         db.clear(STORE_NAME), db.clear(HISTORY_STORE_NAME),
-        db.clear(ATTACHMENT_BLOB_STORE), db.clear(ATTACHMENT_INDEX_STORE),
+        db.clear(ATTACHMENT_BLOB_STORE), db.clear(ATTACHMENT_INDEX_STORE), db.clear(KV_STORE_NAME),
     ]);
+    await forgetCacheKey();   // the next account gets its own key
 }
 
 /** Storage breakdown for the info page: attachment files (count + bytes) and cached history (chats + msgs). */
@@ -183,10 +237,14 @@ export async function mediaStats(): Promise<{files: number; fileBytes: number; c
         const db = await initDB();
         const blobs = (await db.getAll(ATTACHMENT_BLOB_STORE)) as unknown[];
         let fileBytes = 0;
-        for (const b of blobs) fileBytes += b instanceof Blob ? b.size : ((b as {byteLength?: number})?.byteLength ?? 0);
-        const histories = (await db.getAll(HISTORY_STORE_NAME)) as unknown[][];
-        const messages = histories.reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0);
-        return {files: blobs.length, fileBytes, chats: histories.length, messages};
+        for (const b of blobs) fileBytes += storedBytes(b);
+        const chatIds = (await db.getAllKeys(HISTORY_STORE_NAME)) as string[];
+        let messages = 0;
+        for (const chatId of chatIds) {
+            const rows = await fromDisk<ChatMessage[]>(await db.get(HISTORY_STORE_NAME, chatId), historyPlace(chatId));
+            if (Array.isArray(rows)) messages += rows.length;
+        }
+        return {files: blobs.length, fileBytes, chats: chatIds.length, messages};
     } catch { return {files: 0, fileBytes: 0, chats: 0, messages: 0}; }
 }
 
@@ -195,7 +253,7 @@ export async function mediaStats(): Promise<{files: number; fileBytes: number; c
 export async function deleteChatCache(chatId: string): Promise<void> {
     try {
         const db = await initDB();
-        const msgs = (await db.get(HISTORY_STORE_NAME, chatId)) as ChatMessage[] | undefined;
+        const msgs = await fromDisk<ChatMessage[]>(await db.get(HISTORY_STORE_NAME, chatId), historyPlace(chatId));
         const aids = Array.isArray(msgs)
             ? msgs.map((m) => m?.meta?.attachmentId).filter((a): a is string => !!a)
             : [];
@@ -208,7 +266,7 @@ export async function deleteChatCache(chatId: string): Promise<void> {
             const dropped = new Set(aids);
             const index = await readCacheIndex(db);
             const next = index.filter((e) => !dropped.has(e.id));
-            if (next.length !== index.length) await db.put(ATTACHMENT_INDEX_STORE, next, ATTACHMENT_INDEX_KEY);
+            if (next.length !== index.length) await writeCacheIndex(db, next);
         }
         await db.delete(HISTORY_STORE_NAME, chatId);
     } catch { /* best-effort */ }
@@ -231,9 +289,52 @@ export async function pruneAttachmentIndex(): Promise<number> {
         const index = await readCacheIndex(db);
         const next = index.filter((e) => liveBlobs.has(e.id));
         if (next.length !== index.length) {
-            await db.put(ATTACHMENT_INDEX_STORE, next, ATTACHMENT_INDEX_KEY);
+            await writeCacheIndex(db, next);
             return index.length - next.length;
         }
     } catch { /* best-effort */ }
     return 0;
+}
+
+// --- small sealed values (Android app only) ------------------------------------------
+// What a browser keeps in localStorage — drafts, the lists of secret and sticky chats — and the name
+// cache: in the app each is one sealed record here.
+export const KV = {drafts: "drafts", secretChats: "secretChats", stickyChats: "stickyChats", names: "names"} as const;
+export type KvName = typeof KV[keyof typeof KV];
+
+/** The stored value, or null. `wait` — wait for the key (startup restore) instead of answering null. */
+export async function kvGet<T>(name: KvName, opts?: {wait?: boolean}): Promise<T | null> {
+    const db = await initDB();
+    return (await fromDisk<T>(await db.get(KV_STORE_NAME, name), kvPlace(name), opts)) ?? null;
+}
+
+export async function kvSet(name: KvName, value: unknown): Promise<void> {
+    if (!sealing()) return;   // a browser keeps these in localStorage
+    const db = await initDB();
+    await inOrder(kvPlace(name), async () => {
+        const rec = await toDisk(value, kvPlace(name));
+        await db.put(KV_STORE_NAME, rec, name);
+    });
+}
+
+// A build before 10097 stored the history and the attachments in the clear. They are a cache: erased once,
+// not converted (the send queue is converted — see loadOutboxFromDB). The mark is not user data.
+const SEALED_MARK = "wolp.cacheSealed";
+const OPEN_NAMES_DB = "wolp-names";
+
+/** Android app, once after the update: erase what an earlier build left on disk in the clear. Best-effort. */
+export async function dropOpenCache(): Promise<void> {
+    if (!sealing()) return;
+    try {
+        if (localStorage.getItem(SEALED_MARK) === "1") return;
+        const db = await initDB();
+        await Promise.all([
+            db.clear(HISTORY_STORE_NAME), db.clear(ATTACHMENT_BLOB_STORE), db.clear(ATTACHMENT_INDEX_STORE),
+        ]);
+        await new Promise<void>((resolve) => {
+            const req = indexedDB.deleteDatabase(OPEN_NAMES_DB);
+            req.onsuccess = req.onerror = req.onblocked = () => resolve();
+        });
+        localStorage.setItem(SEALED_MARK, "1");
+    } catch { /* tried again on the next start */ }
 }
