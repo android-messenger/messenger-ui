@@ -2,13 +2,12 @@ import {describe, it, expect, vi, beforeEach} from "vitest";
 
 // buildResponse orchestration: we re-send ONLY messages we ourselves sent, to their ORIGINAL recipient, in
 // the requested chat (authorization — closes a plaintext oracle); everything else is NACK'd via `missing`.
-// Heavy deps (provisioning, at-rest, the ratchet) are mocked — this asserts the split + auth, not the crypto.
-vi.mock("../../lib/provisioning.ts", () => ({ensureProvisioned: vi.fn(async () => ({store: {}, deviceId: "dev"}))}));
+// Heavy deps (at-rest, the encryption module) are mocked — this asserts the split + auth, not the crypto.
 const loadPlaintextRecord = vi.fn();
 vi.mock("../../lib/atRest.ts", () => ({loadPlaintextRecord: (...a: unknown[]) => loadPlaintextRecord(...a), E2EE_PLAINTEXT_TTL_MS: 172_800_000}));
-const encryptRecovery = vi.fn(async (_s: unknown, _u: string, _c: string, items: Array<{mid: string; text: string}>) =>
+const encryptRecovery = vi.fn(async (_u: string, _c: string, items: Array<{mid: string; text: string}>) =>
     items.map((it) => ({mid: it.mid, t: 3, b: "cipher:" + it.mid})));
-vi.mock("../../lib/secretSession.ts", () => ({encryptRecovery: (...a: Parameters<typeof encryptRecovery>) => encryptRecovery(...a)}));
+vi.mock("../../crypto.ts", () => ({secretCrypto: {encryptRecovery: (...a: Parameters<typeof encryptRecovery>) => encryptRecovery(...a)}}));
 
 import {buildResponse, RECOVER_RESP} from "../protocol.ts";
 
@@ -27,7 +26,7 @@ describe("buildResponse — recover vs NACK, with authorization", () => {
         expect(resp.conversationId).toBe("chatX");
         expect(resp.items.map((i) => i.mid)).toEqual(["have1", "have2"]);
         expect(resp.missing).toEqual(["gone1", "gone2"]);
-        expect(encryptRecovery).toHaveBeenCalledWith({}, "requester", "chatX", [
+        expect(encryptRecovery).toHaveBeenCalledWith("requester", "chatX", [
             {mid: "have1", text: "text-have1"}, {mid: "have2", text: "text-have2"},
         ]);
     });

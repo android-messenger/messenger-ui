@@ -12,7 +12,7 @@ import {markSent} from "@/features/chat/model/slices/outboxSlice.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {playNotificationSound} from "@/shared/sound/notify.ts";
 import {showDesktopNotification} from "@/features/notifications";
-import {secretCrypto, reportUndecryptable, savePlaintext, loadPlaintext, E2EE_PLAINTEXT_TTL_MS} from "@/features/e2ee";
+import {secretCrypto, secretAvailable, reportUndecryptable, savePlaintext, loadPlaintext, E2EE_PLAINTEXT_TTL_MS} from "@/features/e2ee";
 import {isSecretEnvelope, classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey, buildRekeyHint, makeThrottle, REKEY_COALESCE_MS} from "@/features/e2ee/wire.ts";
 import {ulidTimeMs, isUlid} from "@/shared/ulid/ulid.ts";
 import i18n from "@/shared/i18n";
@@ -80,7 +80,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                     // recovery (the sender's copy is gone too), and show "expired", not "lost".
                     const aged = plain == null && isUlid(m.id) && Date.now() - ulidTimeMs(m.id) > E2EE_PLAINTEXT_TTL_MS;
                     let recoverable = false;
-                    if (plain == null && !aged && m.from && m.from !== myId) {
+                    if (plain == null && !aged && m.from && m.from !== myId && secretAvailable()) {
                         // Never decrypted live → try the ratchet now (in-order over history).
                         try {
                             plain = await secretCrypto.decrypt(m.from, m.text);
@@ -100,7 +100,8 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                     }
                     // "lost" ONLY when we actually tried and failed within the window. Own messages we can't
                     // re-derive from history (the envelope is encrypted to the peer) → "unavailable".
-                    const state = aged ? "expired"
+                    const state = !secretAvailable() ? "appOnly"
+                        : aged ? "expired"
                         : recoverable ? "pending"
                         : m.from === myId ? "unavailable"
                         : "lost";
@@ -169,6 +170,8 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                     const seen = (await loadPlaintext(msg.id, E2EE_PLAINTEXT_TTL_MS))
                         ?? (cid ? await loadPlaintext(cid, E2EE_PLAINTEXT_TTL_MS) : null);
                     if (seen != null) { patch(seen); return; }
+                    // A browser has no keys: it shows where the message can be read and asks the sender for nothing.
+                    if (!secretAvailable()) { patch(i18n.t(secretStateKey("appOnly"))); return; }
                     try {
                         const plain = await secretCrypto.decrypt(frame.senderId ?? msg.from, secretBody);
                         patch(plain);

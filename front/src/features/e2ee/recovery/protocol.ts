@@ -5,7 +5,7 @@ import {logger} from "@/shared/logger/logger.ts";
 // The recovery protocol messages (ride the opaque SIGNAL channel, so `from`/`to`/`conversationId` are added
 // by the transport). clientIds are NOT secret; only the recovered message bodies are (re-encrypted). The
 // re-encryption never rides the stalled chain — a repair sent there would land past the same gap: the
-// browser implementation uses a dedicated session, the Android app starts a new one (secretCrypto).
+// Android app's library starts a new session (secretCrypto).
 export const RECOVER_REQ = "e2ee:recover-req";
 export const RECOVER_RESP = "e2ee:recover-resp";
 

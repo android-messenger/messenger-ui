@@ -7,7 +7,7 @@ vi.mock("react-i18next", () => ({useTranslation: () => ({t: (k: string) => k, i1
 vi.mock("react-redux", () => ({useSelector: (fn: (s: unknown) => unknown) => fn({user: {id: "u12345678"}, ws: {status: "connected"}})}));
 // stats are async IndexedDB reads — stub them out.
 vi.mock("@/features/chat/db/db.ts", () => ({mediaStats: async () => ({files: 0, fileBytes: 0, chats: 0, messages: 0})}));
-vi.mock("@/features/e2ee", () => ({cryptoStats: async () => ({deviceKeyCreatedAt: 0, secretMessages: 0, secretBytes: 0, pendingRecovery: 0, verifiedContacts: 0, protocol: "signal", lib: "x", envelope: 1})}));
+vi.mock("@/features/e2ee", () => ({cryptoStats: async () => ({secretMessages: 0, secretBytes: 0, pendingRecovery: 0, protocol: "signal"})}));
 vi.mock("@/shared/diag/diag.ts", () => ({
     appVersion: "0.2.3", buildTime: "", getLoginAt: () => 0, connectsInLast: () => 0, connectBuckets: () => [] as number[],
 }));

@@ -114,7 +114,7 @@ describe("WebRTCService", () => {
     });
 
     it("startCall — fail-closed: encryption failure ends the call, no plaintext offer sent", async () => {
-        encMock.mockRejectedValueOnce(new Error("NO_PEER_KEYS"));
+        encMock.mockRejectedValueOnce(Object.assign(new Error("e2ee encrypt refused"), {code: "no_device"}));
         await expect(webRTCService.startCall("peerNoKeys")).rejects.toThrow();
         const sentTypes = (sendWS as ReturnType<typeof vi.fn>).mock.calls.map((c) => (c[0] as OutgoingWebRTCMessage).type);
         expect(sentTypes).not.toContain("call:offer");

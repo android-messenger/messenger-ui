@@ -1,7 +1,6 @@
 import {E2EE_DATABASES, E2EE_LOCAL_KEYS, E2EE_WIPE_PENDING_KEY} from "./stores.ts";
-import {SignalStore} from "./signalStore.ts";
-import {forgetDeviceKey, abortVaultWaits} from "./deviceKey.ts";
-import {deleteSelf} from "./keyDirectory.ts";
+import {getOwner, setOwner, dropLegacyKeys} from "./ownerStore.ts";
+import {abortVaultWaits} from "./deviceKey.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {deviceTrust, isNativeApp} from "@/shared/platform.ts";
 import {forgetKeyChanges} from "./keyChange.ts";
@@ -41,7 +40,6 @@ export async function wipeE2eeData(): Promise<void> {
     lsSet(E2EE_WIPE_PENDING_KEY, "1");
     abortVaultWaits();   // nothing may keep waiting for the Vault across a logout
     forgetKeyChanges();
-    forgetDeviceKey();
     let allGone = false;
     try {
         allGone = (await Promise.all(E2EE_DATABASES.map(deleteDb))).every(Boolean);
@@ -63,41 +61,24 @@ export async function finishPendingE2eeWipe(): Promise<boolean> {
     return true;
 }
 
-const DIRECTORY_TIMEOUT_MS = 4_000;
 /** The app waits up to 4 s for the key directory itself; a logout never hangs on it. */
 const NATIVE_WIPE_TIMEOUT_MS = 6_000;
 
 /**
- * Sign-out, the part that needs the session. In the Android app: the app erases its keys and its record.
- * In a browser: remove this device's record from the key directory, so a peer gets "the recipient has no keys"
- * instead of encrypting to a key that is about to be erased. Call while the session is still valid and
- * BEFORE wipeE2eeData (the device id is read from the store). Best-effort: no record, 409 (a browser
- * asking to delete the phone's record), 401, an unreachable directory or a slow one never stop a logout.
+ * Sign-out, the part that needs the session: the Android app's library erases its keys, sessions and marks
+ * and takes its record out of the key directory (owner's decision: the keys are erased on every sign-out).
+ * Call while the session is still valid and BEFORE wipeE2eeData. Best-effort: a failure or a slow answer
+ * never stops a logout. A browser has no keys and no record: nothing to do there.
  */
 export async function removeFromKeyDirectory(): Promise<void> {
-    // In the Android app the keys and the record are the app's library's: it erases the keys, sessions and
-    // marks and removes the record itself (owner's decision: the keys are erased on every sign-out).
-    if (isNativeApp()) {
-        try {
-            await Promise.race([
-                deviceTrust().e2eeWipe(),
-                new Promise<void>((resolve) => setTimeout(resolve, NATIVE_WIPE_TIMEOUT_MS)),
-            ]);
-        } catch (e) {
-            logger.warn("e2ee: the app did not erase its keys on logout", e as Error);
-        }
-        return;
-    }
+    if (!isNativeApp()) return;
     try {
-        // The device id is stored in the clear; a device that never provisioned has nothing to remove.
-        const deviceId = await new SignalStore().getDeviceId();
-        if (!deviceId) return;
         await Promise.race([
-            deleteSelf(deviceId),
-            new Promise<void>((resolve) => setTimeout(resolve, DIRECTORY_TIMEOUT_MS)),
+            deviceTrust().e2eeWipe(),
+            new Promise<void>((resolve) => setTimeout(resolve, NATIVE_WIPE_TIMEOUT_MS)),
         ]);
     } catch (e) {
-        logger.debug("e2ee: key directory record not removed on logout (best-effort)", e as Error);
+        logger.warn("e2ee: the app did not erase its keys on logout", e as Error);
     }
 }
 
@@ -112,14 +93,13 @@ export async function ensureE2eeOwner(userId: string): Promise<boolean> {
     let wiped = false;
     try {
         wiped = await finishPendingE2eeWipe();
-        const store = new SignalStore();
-        const owner = await store.getOwner();
+        const owner = await getOwner();
         if (owner !== undefined && owner !== userId) {
             logger.warn("e2ee: data of another user found on this device — erased");
             await wipeE2eeData();
             wiped = true;
         }
-        if (wiped || owner === undefined) await new SignalStore().setOwner(userId);
+        if (wiped || owner === undefined) await setOwner(userId);
     } catch (e) {
         logger.warn("e2ee: owner check failed", e as Error);
     }
@@ -138,7 +118,7 @@ export const E2EE_NATIVE_KEYS_KEY = "wolp.e2eeNativeKeys";
 export async function dropInterfaceKeys(): Promise<void> {
     if (!isNativeApp() || lsGet(E2EE_NATIVE_KEYS_KEY) !== null) return;
     try {
-        await new SignalStore().dropKeys();
+        await dropLegacyKeys();
         lsRemove(E2EE_LS.verified);
         lsSet(E2EE_NATIVE_KEYS_KEY, "1");
         logger.info("e2ee: the interface's own keys are erased — the app's library holds the keys now");

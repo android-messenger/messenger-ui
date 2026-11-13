@@ -4,8 +4,8 @@ import {describe, it, expect, beforeEach, afterEach, vi} from "vitest";
 import {b64, unb64, unwrapBytes, wrapBytes, VAULT_LOCKED_POLL_MS, type Wrapped} from "../deviceKey";
 import {loadPlaintext, plaintextStats, savePlaintext} from "../atRest";
 
-// S1-5: inside the Android app wrapBytes/unwrapBytes go to the native Vault (DeviceTrust plugin) with a
-// purpose; the browser path (WebCrypto, records without `kind`) is covered by the existing tests.
+// S1-5: wrapBytes/unwrapBytes go to the Android app's Vault (DeviceTrust plugin) with a purpose. Outside
+// the app nothing is wrapped; a record of an older browser version (no `kind`) is unreadable.
 
 // A fake Vault: the blob is the purpose tag + the data, so a wrong purpose fails like AEAD would.
 const vault = {
@@ -42,7 +42,7 @@ describe("deviceKey in the Android app (native Vault)", () => {
     it("never touches WebCrypto: a WebCrypto record is refused, no device key is created", async () => {
         const subtle = vi.spyOn(crypto.subtle, "generateKey");
         const legacy: Wrapped = {iv: new Uint8Array(12).buffer, ct: new Uint8Array(16).buffer};
-        await expect(unwrapBytes(legacy)).rejects.toThrow(/WebCrypto/);
+        await expect(unwrapBytes(legacy)).rejects.toThrow(/older browser version/);
         await wrapBytes(bytes("x"));
         expect(subtle).not.toHaveBeenCalled();
         subtle.mockRestore();
@@ -120,10 +120,10 @@ describe("deviceKey in a browser", () => {
         await expect(unwrapBytes({kind: "native", blob: "AAAA"})).rejects.toThrow(/Android app/);
     });
 
-    it("writes the WebCrypto format without a kind (readable by older clients)", async () => {
-        const w = await wrapBytes(bytes("b"));
-        expect("kind" in w).toBe(false);
-        expect(new TextDecoder().decode(await unwrapBytes(w))).toBe("b");
+    it("nothing is wrapped outside the app: there is no key there", async () => {
+        await expect(wrapBytes(bytes("b"))).rejects.toThrow(/Android app/);
+        expect(await savePlaintext("b1", "chat1", "hola")).toBe(false);
+        expect(await loadPlaintext("b1")).toBeNull();
         expect(unb64(b64(bytes("b").buffer)).byteLength).toBe(1);
     });
 });

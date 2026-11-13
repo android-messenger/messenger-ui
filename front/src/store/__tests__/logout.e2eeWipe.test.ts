@@ -3,7 +3,9 @@ import {describe, it, expect, vi, beforeEach, afterEach} from "vitest";
 import {openDB} from "idb";
 
 // Spec 001, story 1 (finding 13): logging out must leave no E2EE keys, no secret history and no marks
-// on the device. Real IndexedDB (fake-indexeddb) and real localStorage; only the network is stubbed.
+// on the device. Real IndexedDB (fake-indexeddb) and real localStorage; the network and the Android app
+// (its Vault and its sign-out calls) are stubbed. Secret data exists only in the app, so the tests run as
+// the app; what older browser versions left behind is seeded by hand.
 
 vi.mock("@/features/auth/model/services/kratosFlows.ts", () => ({
     logout: vi.fn(async () => "https://kratos.internal/self-service/logout?token=t"),
@@ -16,11 +18,10 @@ import {setUser, clearUser} from "@/features/auth/slices/userSlice";
 import {ensureE2eeOwner, wipeE2eeData, finishPendingE2eeWipe} from "@/features/e2ee";
 import {E2EE_DATABASES, E2EE_LOCAL_KEYS, E2EE_WIPE_PENDING_KEY} from "@/features/e2ee/lib/stores";
 import {markSecret} from "@/features/chat/model/slices/secretChatsSlice";
-import {SignalStore} from "@/features/e2ee/lib/signalStore";
-import {getDeviceKey} from "@/features/e2ee/lib/deviceKey";
+import {getOwner} from "@/features/e2ee/lib/ownerStore";
+import {installFakeApp} from "@/features/e2ee/lib/__tests__/fakeApp";
 import {savePlaintext, loadPlaintext} from "@/features/e2ee/lib/atRest";
 import {addPending} from "@/features/e2ee/recovery/pendingStore";
-import {markVerified} from "@/features/e2ee/lib/safetyNumber";
 import type {WebRTCService} from "@/features/call/service/webRTCService";
 
 // Written out, not imported: the test must fail if a name silently leaves the list.
@@ -32,26 +33,33 @@ async function dbNames(): Promise<string[]> {
     return (await indexedDB.databases()).map((d) => d.name ?? "");
 }
 
-/** Everything a user who used secret chats leaves on the device. */
+/** A value of the database older versions kept their keys in; undefined when it is not there. */
+async function signalMeta(key: string): Promise<unknown> {
+    const d = await openDB("e2ee-signal");
+    try { return d.objectStoreNames.contains("meta") ? await d.get("meta", key) : undefined; } finally { d.close(); }
+}
+
+/** Everything a user who used secret chats leaves on the device, leftovers of older versions included. */
 async function seedUserData(store: ReturnType<typeof configureAppStore>) {
-    await getDeviceKey();
+    (await openDB("e2ee-device", 1, {upgrade(d) { d.createObjectStore("wrap"); }})).close();
     const signal = await openDB("e2ee-signal", 2, {
         upgrade(d) { for (const s of ["meta", "prekeys", "signedprekeys", "sessions", "peers", "roster"]) d.createObjectStore(s); },
     });
     await signal.put("meta", "device-A", "deviceId");
     await signal.put("meta", {pub: new ArrayBuffer(4), priv: {kind: "native", blob: "x"}}, "identity");
+    await signal.put("roster", {deviceIds: ["peer-dev"], fetchedAt: 1}, "peer-1");
     signal.close();
-    await new SignalStore().putRosterSnapshot("peer-1", ["peer-dev"]);
     await savePlaintext("m1", "c-secret", "meet at the old bridge at nine");
     expect(await loadPlaintext("m1")).toBe("meet at the old bridge at nine");
     await addPending([{clientId: "k1", serverId: "s1", chatId: "c-secret", peerId: "peer-1"}]);
-    markVerified("peer-1", "12345 67890");
+    localStorage.setItem("wolp.e2eeVerified", JSON.stringify({"peer-1": "12345 67890"}));
     store.dispatch(markSecret("c-secret"));
 }
 
 const fetchMock = vi.fn();
 const noContent = () => Promise.resolve({ok: true, status: 204, text: async () => "", headers: new Headers()});
-const status = (code: number) => () => Promise.resolve({ok: false, status: code, text: async () => "", headers: new Headers()});
+let app: ReturnType<typeof installFakeApp>;
+const keyDirectoryCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/key-directory"));
 
 async function expectNothingLeft() {
     const left = await dbNames();
@@ -69,13 +77,14 @@ async function loggedInStoreWithData(userId = "user-A") {
 
 describe("logout wipes E2EE keys and secret data", () => {
     beforeEach(async () => {
+        app = installFakeApp();
         await wipeE2eeData();
         localStorage.clear();
         fetchMock.mockReset();
         fetchMock.mockImplementation(noContent);
         vi.stubGlobal("fetch", fetchMock);
     });
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => { app.uninstall(); vi.unstubAllGlobals(); });
 
     it("the list of stores is the four databases and the two localStorage keys", () => {
         expect([...E2EE_DATABASES].sort()).toEqual([...E2EE_DBS].sort());
@@ -104,35 +113,29 @@ describe("logout wipes E2EE keys and secret data", () => {
         expect(await ensureE2eeOwner("user-B")).toBe(false);   // nothing of A was left to erase
         b.dispatch(setUser({id: "user-B", name: "B"}));
 
-        const signal = new SignalStore();
-        expect(await signal.hasIdentity()).toBe(false);          // B will provision a NEW key
-        expect(await signal.getDeviceId()).toBeUndefined();
-        expect(await signal.getOwner()).toBe("user-B");
+        expect(await signalMeta("identity")).toBeUndefined();
+        expect(await signalMeta("deviceId")).toBeUndefined();
+        expect(await getOwner()).toBe("user-B");
         expect(await loadPlaintext("m1")).toBeNull();
         expect(b.getState().secretChats.byId).toEqual({});
     });
 
-    it("removes this device from the key directory while the session is still valid (scenario 1.3)", async () => {
+    it("the app erases its keys and its directory record while the session is still valid (scenario 1.3)", async () => {
         const store = await loggedInStoreWithData();
 
         await fullLogout(store.dispatch);
 
-        const calls = fetchMock.mock.calls.map(([url, init]) => ({url: String(url), method: init?.method ?? "GET", credentials: init?.credentials}));
-        const del = calls.findIndex((c) => c.method === "DELETE");
-        expect(calls[del]).toEqual({url: "/key-directory/v1/keys/self/device-A", method: "DELETE", credentials: "include"});
-        const kratos = calls.findIndex((c) => c.url.includes("/self-service/logout"));
-        expect(kratos).toBeGreaterThan(del);                     // the session is invalidated AFTER the delete
+        expect(app.plugin.e2eeWipe).toHaveBeenCalledTimes(1);
+        const kratos = fetchMock.mock.calls.findIndex(([url]) => String(url).includes("/self-service/logout"));
+        expect(kratos).toBeGreaterThanOrEqual(0);
+        // the session is invalidated AFTER the app was asked
+        expect(app.plugin.e2eeWipe.mock.invocationCallOrder[0]).toBeLessThan(fetchMock.mock.invocationCallOrder[kratos]);
+        expect(keyDirectoryCalls()).toEqual([]);                 // the interface itself never talks to the key directory
     });
 
-    it.each([
-        ["refuses with 409 (the record belongs to the phone)", status(409)],
-        ["answers 404 (no such device)", status(404)],
-        ["answers 401", status(401)],
-        ["answers 500", status(500)],
-        ["is unreachable", () => Promise.reject(new TypeError("network down"))],
-    ])("logout and the wipe still finish when the key directory %s (scenario 1.4)", async (_name, answer) => {
+    it("logout and the wipe still finish when the app fails to erase its keys (scenario 1.4)", async () => {
         const store = await loggedInStoreWithData();
-        fetchMock.mockImplementation(answer);
+        app.plugin.e2eeWipe.mockRejectedValueOnce(Object.assign(new Error("not implemented"), {code: "UNIMPLEMENTED"}));
 
         await fullLogout(store.dispatch);
 
@@ -140,13 +143,14 @@ describe("logout wipes E2EE keys and secret data", () => {
         expect(store.getState().user.id).toBe("Anonimo");
     });
 
-    it("a device that never used secret chats logs out without calling the key directory", async () => {
-        const store = configureAppStore(webrtc);
-        store.dispatch(setUser({id: "user-A", name: "A"}));
+    it("a browser logs out without the app and without the key directory; leftovers of older versions go", async () => {
+        const store = await loggedInStoreWithData();             // what an older browser version left behind
+        app.uninstall();
 
         await fullLogout(store.dispatch);
 
-        expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+        expect(keyDirectoryCalls()).toEqual([]);
+        expect(app.plugin.e2eeWipe).not.toHaveBeenCalled();
         await expectNothingLeft();
     });
 
@@ -193,23 +197,20 @@ describe("logout wipes E2EE keys and secret data", () => {
         const left = await dbNames();
         for (const name of ["e2ee-device", "e2ee-plaintext", "e2ee-recovery"]) expect(left).not.toContain(name);
         for (const key of E2EE_KEYS) expect(localStorage.getItem(key)).toBeNull();
-        const signal = new SignalStore();
-        expect(await signal.hasIdentity()).toBe(false);
-        expect(await signal.getOwner()).toBe("user-B");
+        expect(await signalMeta("identity")).toBeUndefined();
+        expect(await getOwner()).toBe("user-B");
         expect(await loadPlaintext("m1")).toBeNull();
     });
 
     it("data written before the owner field existed is kept and stamped with the current user", async () => {
         const store = configureAppStore(webrtc);
         await seedUserData(store);                               // no owner recorded
-        expect(await new SignalStore().getOwner()).toBeUndefined();
+        expect(await getOwner()).toBeUndefined();
 
         expect(await ensureE2eeOwner("user-A")).toBe(false);
 
-        const signal = new SignalStore();
-        expect(await signal.getOwner()).toBe("user-A");
-        expect(await signal.hasIdentity()).toBe(true);
-        expect(await signal.getDeviceId()).toBe("device-A");
+        expect(await getOwner()).toBe("user-A");
+        expect(await signalMeta("deviceId")).toBe("device-A");
         expect(await loadPlaintext("m1")).toBe("meet at the old bridge at nine");
         expect(localStorage.getItem("wolp.e2eeVerified")).toContain("peer-1");
     });
@@ -220,12 +221,11 @@ describe("logout wipes E2EE keys and secret data", () => {
         const store = await loggedInStoreWithData();
         const fetchWas = globalThis.fetch;
         globalThis.fetch = vi.fn(() => Promise.reject(new TypeError("Failed to fetch"))) as typeof fetch;
-        const plugin = {e2eeWipe: vi.fn(async () => {}), sessionEnd: vi.fn(async () => ({ended: false}))};
-        const g = globalThis as {Capacitor?: unknown};
-        g.Capacitor = {isNativePlatform: () => true, Plugins: {DeviceTrust: plugin}};
+        const plugin = app.plugin;
+        plugin.sessionEnd.mockResolvedValueOnce({ended: false});
         try {
             await fullLogout(store.dispatch);
-        } finally { delete g.Capacitor; globalThis.fetch = fetchWas; }
+        } finally { globalThis.fetch = fetchWas; }
         expect(plugin.sessionEnd).toHaveBeenCalledTimes(1);
         expect(plugin.e2eeWipe.mock.invocationCallOrder[0]).toBeLessThan(plugin.sessionEnd.mock.invocationCallOrder[0]);
     });
@@ -257,12 +257,9 @@ describe("logout wipes E2EE keys and secret data", () => {
         // the same user logs in again
         expect(await ensureE2eeOwner("user-A")).toBe(false);
 
-        const signal = new SignalStore();
-        expect(await signal.hasIdentity()).toBe(true);
-        expect(await signal.getDeviceId()).toBe("device-A");
+        expect(await signalMeta("deviceId")).toBe("device-A");
         expect(await loadPlaintext("m1")).toBe("meet at the old bridge at nine");
         expect(localStorage.getItem("wolp.secretChats")).toContain("c-secret");
-        expect(localStorage.getItem("wolp.e2eeVerified")).toContain("peer-1");
-        expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+        expect(app.plugin.e2eeWipe).not.toHaveBeenCalled();
     });
 });

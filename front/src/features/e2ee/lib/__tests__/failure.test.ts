@@ -1,12 +1,24 @@
 import {describe, it, expect} from "vitest";
 import {
-    MAX_SKIP_PER_CHAIN, classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey,
+    classifyDecryptError, refusalCode, sendFailureKey, isRecoverable, isWrongDevice, secretStateKey,
     type DecryptFailure, type SecretMsgState,
 } from "../failure";
 
 describe("failure taxonomy", () => {
-    it("pins the library's hard skip ceiling", () => {
-        expect(MAX_SKIP_PER_CHAIN).toBe(2000);   // matches session-cipher.js "Over 2000 messages into the future!"
+    it("a browser's refusal is told to the user and never turns into a recovery request", () => {
+        const e = Object.assign(new Error("e2ee: only in the Android app"), {code: "app_only"});
+        expect(refusalCode(e)).toBe("app_only");
+        expect(sendFailureKey(e)).toBe("chat.appOnly");
+        expect(classifyDecryptError(e)).toBe("app-only");
+        expect(isRecoverable("app-only")).toBe(false);
+    });
+
+    it("the user is told why a secret message was not sent", () => {
+        const refused = (code: string) => Object.assign(new Error("e2ee encrypt refused"), {code});
+        expect(sendFailureKey(refused("no_passport"))).toBe("chat.peerNotInApp");
+        expect(sendFailureKey(refused("no_device"))).toBe("chat.peerNoKeys");
+        expect(sendFailureKey(refused("bad_passport"))).toBe("chat.peerKeyRejected");
+        expect(sendFailureKey(new Error("anything else"))).toBe("chat.encryptFailed");
     });
 
     it("classifies the real libsignal error messages", () => {
@@ -55,6 +67,7 @@ describe("failure taxonomy", () => {
             expired: "chat.decryptExpired",
             lost: "chat.decryptLost",
             unavailable: "chat.decryptUnavailable",
+            appOnly: "chat.secretAppOnly",
         };
         for (const [state, key] of Object.entries(map)) {
             expect(secretStateKey(state as SecretMsgState)).toBe(key);

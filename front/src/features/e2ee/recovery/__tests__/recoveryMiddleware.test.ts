@@ -4,6 +4,7 @@ import {describe, it, expect, vi, beforeEach} from "vitest";
 // actually asked, for that chat, and never clobbering a message the same response just recovered. clientIds
 // ride the frames in the clear, so an unauthenticated NACK from a third party must NOT force a false "lost".
 const h = vi.hoisted(() => ({
+    inApp: true,
     applyResponse: vi.fn(),
     savePlaintext: vi.fn(async () => {}),
     allPending: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock("../protocol.ts", async (orig) => ({
     applyResponse: h.applyResponse, buildResponse: vi.fn(),
 }));
 vi.mock("../../lib/atRest.ts", () => ({savePlaintext: h.savePlaintext}));
+vi.mock("../../crypto.ts", () => ({secretCrypto: {resetSession: vi.fn(async () => {})}, secretAvailable: () => h.inApp}));
 vi.mock("../pendingStore.ts", () => ({
     allPending: h.allPending, removePending: h.removePending,
     addPending: vi.fn(async () => []), bumpAttempt: vi.fn(async () => {}),
@@ -60,6 +62,21 @@ beforeEach(() => {
     h.savePlaintext.mockClear();
     h.removePending.mockReset().mockResolvedValue(undefined);
     h.allPending.mockReset().mockResolvedValue([pend()]);
+});
+
+describe("recovery middleware — a browser has no keys", () => {
+    it("neither asks for recovery nor handles a recovery frame", async () => {
+        h.inApp = false;
+        try {
+            h.allPending.mockResolvedValue([pend({lastAt: 0})]);
+            const {dispatched, run} = harness();
+            run({type: RECOVER_RESP, from: "bob", conversationId: "chat", items: [], missing: ["c1"]});
+            await flush(); await flush();
+            expect(dispatched).toEqual([]);
+            expect(h.applyResponse).not.toHaveBeenCalled();
+            expect(h.removePending).not.toHaveBeenCalled();
+        } finally { h.inApp = true; }
+    });
 });
 
 describe("recovery middleware — RECOVER_RESP handling", () => {

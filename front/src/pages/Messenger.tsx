@@ -2,6 +2,8 @@ import {useCallback, useEffect, useRef, useState} from "react";
 import {useNavigate, useSearchParams} from "react-router-dom";
 import {useDispatch, useSelector} from "react-redux";
 import {useTranslation} from "react-i18next";
+import toast from "react-hot-toast";
+import {secretAvailable} from "@/features/e2ee";
 
 import ChatList from "@/features/chat/ui/ChatList.tsx";
 import ChatWindow from "@/features/chat/ui/ChatWindow.js";
@@ -138,13 +140,16 @@ export default function Messenger() {
     const selectedCounterpartId = chat.selectedCounterpartId;
     const onLogout = useCallback(() => navigate("/logout"), [navigate]);
     const onOpenDeleteModal = useCallback(() => setShowDeleteModal(true), []);
-    const onCall = useCallback(() => {
-        // Call the counterpart's USER id (signaling recipient), not the conversationId.
-        if (selectedCounterpartId) dispatch(outgoingCall({peerId: selectedCounterpartId, audioOnly: false}));
-    }, [selectedCounterpartId, dispatch]);
-    const onAudioCall = useCallback(() => {
-        if (selectedCounterpartId) dispatch(outgoingCall({peerId: selectedCounterpartId, audioOnly: true}));
-    }, [selectedCounterpartId, dispatch]);
+    // Call the counterpart's USER id (signaling recipient), not the conversationId. The parameters of a call
+    // are encrypted with the keys of secret chats, so a browser cannot call: the user is told so at once,
+    // before the camera and the microphone are asked for.
+    const startCall = useCallback((audioOnly: boolean) => {
+        if (!selectedCounterpartId) return;
+        if (!secretAvailable()) { toast.error(t("chat.appOnly")); return; }
+        dispatch(outgoingCall({peerId: selectedCounterpartId, audioOnly}));
+    }, [selectedCounterpartId, dispatch, t]);
+    const onCall = useCallback(() => startCall(false), [startCall]);
+    const onAudioCall = useCallback(() => startCall(true), [startCall]);
 
     /* ======================
        Render

@@ -5,6 +5,7 @@ import {describe, it, expect, vi, beforeEach, afterEach} from "vitest";
 // client-to-client recovery immediately (was: dead-ended at "unavailable" until a later history reload).
 
 const h = vi.hoisted(() => ({
+    inApp: true,
     decryptReceived: vi.fn(),
     loadPlaintext: vi.fn(),
     savePlaintext: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock("@/shared/i18n", () => ({default: {t: (k: string) => k}}));
 // The seam: real marker logic for isSecretEnvelope, mocked ratchet behind secretCrypto.decrypt.
 vi.mock("@/features/e2ee", () => ({
     secretCrypto: {decrypt: h.decryptReceived},
+    secretAvailable: () => h.inApp,
     savePlaintext: h.savePlaintext, loadPlaintext: h.loadPlaintext, E2EE_PLAINTEXT_TTL_MS: 172_800_000,
     reportUndecryptable: h.reportUndecryptable,
 }));
@@ -71,6 +73,7 @@ beforeEach(() => {
     Object.defineProperty(document, "hidden", {configurable: true, get: () => false});
     h.decryptReceived.mockReset(); h.loadPlaintext.mockReset(); h.savePlaintext.mockReset(); h.reportUndecryptable.mockClear();
     h.loadPlaintext.mockResolvedValue(null);
+    h.inApp = true;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -154,6 +157,21 @@ describe("chatMiddleware — secret live path", () => {
 
 // The HISTORY path: rows loaded over REST carry envelopes; each one gets its text (stored, decrypted now,
 // or a state placeholder) patched in — always together with secret === true, which keeps it off disk.
+describe("chatMiddleware — a browser has no keys", () => {
+    it("a live secret message is not decrypted and the sender is asked for nothing", async () => {
+        h.inApp = false;
+        const {dispatched, run} = harness("c1");
+        run(secretOut());
+        await flush(); await flush();
+        expect(h.decryptReceived).not.toHaveBeenCalled();
+        expect(h.reportUndecryptable).not.toHaveBeenCalled();
+        // the delivery ack still goes out; nothing of the secret-chat protocol does
+        const sent = dispatched.filter((a) => a.type === "ws/send").map((a) => String((a.payload as {type?: string}).type));
+        expect(sent.filter((t) => t.startsWith("e2ee:"))).toEqual([]);
+        expect(settledText(dispatched)).toBe("chat.secretAppOnly");
+    });
+});
+
 describe("chatMiddleware — secret history path", () => {
     const OWN_ID = "01KY29D4BHHB40EW2FKMHR6V7N";
     function loadHistory(rows: Array<{id: string; from: string; text: string}>) {
