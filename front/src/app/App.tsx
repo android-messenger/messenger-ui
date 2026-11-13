@@ -2,7 +2,7 @@ import "./App.css";
 import {BrowserRouter, Route, Routes} from "react-router-dom";
 import {lazy, Suspense, useEffect} from "react";
 import {useDispatch, useSelector} from "react-redux";
-import {Toaster} from "react-hot-toast";
+import {AppToaster} from "./AppToaster.tsx";
 
 import type {RootState} from "@/store/store.ts";
 import {RequireAuth} from "@/features/auth/ui/RequireAuth.tsx";
@@ -94,7 +94,7 @@ function App() {
                         <Route path="/app-only" element={<AppOnlyPage/>}/>
                     </Routes>
                 </Suspense>
-                <Toaster/>
+                <AppToaster/>
             </BrowserRouter>
         </ErrorBoundary>
     );
