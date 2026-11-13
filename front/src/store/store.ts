@@ -93,7 +93,8 @@ export function configureAppStore(webRTCService: WebRTCService) {
             const savedVersion = cur.outboxVersion;
             // Mark the version we ACTUALLY saved — not the live one at completion time (a message
             // enqueued during the async put would otherwise be marked persisted but never written).
-            saveOutboxToDB(cur).then(() => store.dispatch(markPersisted(savedVersion)));
+            // A failed write (no key, storage error) leaves the version unmarked: the next change tries again.
+            saveOutboxToDB(cur).then(() => store.dispatch(markPersisted(savedVersion))).catch(() => {});
         }, 400);
     });
 
