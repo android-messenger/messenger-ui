@@ -5,19 +5,20 @@ import {Provider} from "react-redux";
 import {configureStore} from "@reduxjs/toolkit";
 
 vi.mock("@/features/chat/model/services/chatMessages.service.ts", () => ({
-    chatMessagesService: {refetchChatsPreservingSelected: vi.fn()},
+    chatMessagesService: {refetchChatsPreservingSelected: vi.fn(async () => {}), probeUnread: vi.fn(async () => {})},
 }));
 vi.mock("@/features/chat/thunk/sendOutboxThunk.ts", () => ({
     flushOutbox: vi.fn(() => ({type: "test/flushOutbox"})),
 }));
 
-import {useReconnectCatchup} from "../useReconnectCatchup";
+import {useReconnectCatchup, resetUnreadAsked} from "../useReconnectCatchup";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {forgetHistorySync, markStale, noteHistoryRead} from "@/features/chat/model/historySync.ts";
 
 const refetch = vi.mocked(chatMessagesService.refetchChatsPreservingSelected);
 const flush = vi.mocked(flushOutbox);
+const probe = vi.mocked(chatMessagesService.probeUnread);
 
 function setVisibility(v: "visible" | "hidden") {
     Object.defineProperty(document, "visibilityState", {configurable: true, get: () => v});
@@ -47,6 +48,8 @@ function wrap(store: ReturnType<typeof makeStore>) {
 beforeEach(() => {
     refetch.mockClear();
     flush.mockClear();
+    probe.mockClear();
+    resetUnreadAsked();
     forgetHistorySync();
     setVisibility("visible");
 });
@@ -58,7 +61,7 @@ describe("useReconnectCatchup", () => {
         const reload = vi.fn(() => Promise.resolve());
         renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
         expect(flush).not.toHaveBeenCalled();
-        expect(refetch).not.toHaveBeenCalled();
+        expect(refetch).toHaveBeenCalledTimes(1);       // the unread check of this connection (spec 002 §3.2), nothing else
     });
 
     it("on disconnected→connected transition: resends outbox, refreshes list + open history", () => {
@@ -81,7 +84,7 @@ describe("useReconnectCatchup", () => {
             {wrapper: wrap(store), initialProps: {id: "c1"}});
         rerender({id: "c2"}); // switch chats while staying connected
         expect(flush).not.toHaveBeenCalled();
-        expect(refetch).not.toHaveBeenCalled();
+        expect(refetch).toHaveBeenCalledTimes(1);       // once for the connection, not again for the switch
     });
 
     it("does not catch up on the transition's history reload when no chat is open", () => {
@@ -99,6 +102,7 @@ describe("useReconnectCatchup", () => {
         complete(store, "c1");
         const reload = vi.fn(() => Promise.resolve());
         renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
+        refetch.mockClear();
         act(() => { document.dispatchEvent(new Event("visibilitychange")); });
         expect(refetch).toHaveBeenCalledTimes(1);
         expect(reload).toHaveBeenCalledTimes(1);
@@ -110,6 +114,7 @@ describe("useReconnectCatchup", () => {
         complete(store, "c1");
         const reload = vi.fn(() => Promise.resolve());
         renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
+        refetch.mockClear();
         act(() => { document.dispatchEvent(new Event("visibilitychange")); });
         expect(refetch).not.toHaveBeenCalled();
         expect(reload).not.toHaveBeenCalled();
@@ -162,5 +167,23 @@ describe("useReconnectCatchup", () => {
         const reload = vi.fn(() => Promise.resolve());
         renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
         expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    // ---- spec 002 §3.2: unread marks from the server ----
+    it("asks the server for unread marks once per connection: at the start and after every gap", async () => {
+        const store = makeStore("connected");
+        const reload = vi.fn(() => Promise.resolve());
+        const {rerender, unmount} = renderHook(
+            (props: {id: string | null}) => useReconnectCatchup({selectedChatId: props.id, reloadChatHistory: reload}),
+            {wrapper: wrap(store), initialProps: {id: null as string | null}});
+        await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+        rerender({id: "c1"});
+        unmount();
+        renderHook(() => useReconnectCatchup({selectedChatId: null, reloadChatHistory: reload}), {wrapper: wrap(store)});
+        await new Promise((r) => setTimeout(r, 20));
+        expect(probe).toHaveBeenCalledTimes(1);          // the page mounted again under the same connection
+        act(() => { store.dispatch({type: "test/ws", status: "disconnected"}); });
+        act(() => { store.dispatch({type: "test/ws", status: "connected"}); });
+        await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
     });
 });

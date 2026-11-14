@@ -46,6 +46,13 @@ export const chatApi = createApi({
             providesTags: ["Chats"],
         }),
 
+        // The chat's newest message only — for the "unread" mark (spec 002 §3.2). Never cached.
+        getLastMessage: builder.query<ChatMessage | null, { chatId: string }>({
+            query: ({chatId}) => `/chats/${chatId}/messages?limit=1`,
+            transformResponse: (response: unknown): ChatMessage | null => toMessages(response).at(-1) ?? null,
+            keepUnusedDataFor: 0,
+        }),
+
         // --------------------
         // Conversation history (cursor-paginated). chatId === conversationId.
         // --------------------

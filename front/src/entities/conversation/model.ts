@@ -14,6 +14,7 @@ export type ChatSummary = {
     memberIds?: string[];    // GROUP: roster when known. The chat LIST carries none (loaded per-group on open).
     updatedAt?: number;      // epoch ms of last activity (from the backend) — the chat-list sort baseline.
     orderId?: string;
+    myReadId?: string;       // DIRECT: the last message I have read (a server ULID), as the server knows it. Absent — never read.
     blocked: boolean;        // DIRECT only (block is a mutual/terminal per-pair stop). GROUP: always false.
     blockedByMe: boolean;    // I blocked the peer (I can unblock)
     blockedByPeer: boolean;  // the peer blocked me (I can't unblock their side)
