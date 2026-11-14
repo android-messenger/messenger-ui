@@ -65,6 +65,12 @@ export interface PushPlugin {
     unregister(): Promise<void>;
     updateContactNames(o: { names: Record<string, string> }): Promise<void>;
     setForegroundConversation(o: { conversationId: string | null }): Promise<void>;
+    /**
+     * Spec 002 §3.3: a chat message came over the socket. The app notes its id (a late push of the same
+     * message then shows nothing) and shows a notification when the user is not looking at the app.
+     * `hidden` — the page is not visible. APK 10191+.
+     */
+    notifyMessage(o: { conversationId: string; messageId: string; senderId?: string; hidden: boolean }): Promise<{ shown?: boolean }>;
     wsClosed(): Promise<void>;
     addListener(e: "notificationTap", cb: (d: NotificationTapData) => void): Promise<PluginListenerHandle>;
     addListener(e: "appBackground" | "appForeground", cb: () => void): Promise<PluginListenerHandle>;
