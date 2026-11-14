@@ -16,6 +16,8 @@ import {secretCrypto, secretAvailable, reportUndecryptable, savePlaintext, loadP
 import {isSecretEnvelope, classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey, buildRekeyHint, makeThrottle, REKEY_COALESCE_MS} from "@/features/e2ee/wire.ts";
 import {ulidTimeMs, isUlid} from "@/shared/ulid/ulid.ts";
 import i18n from "@/shared/i18n";
+import {isNativeApp, push} from "@/shared/platform.ts";
+import {isAppBackgrounded} from "@/infrastructure/native/appLifecycle.ts";
 import {markSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
 
 // How long a "peer is typing" indicator lingers before auto-clearing if no follow-up frame.
@@ -227,6 +229,21 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                 dispatch(groupApi.endpoints.getGroups.initiate(undefined, {forceRefetch: true}));
             }
 
+            // Spec 002 §3.3 — Android app: every message that comes over the socket is told to the app
+            // BEFORE it is acknowledged. The app notes the message id, so a late push of the same message
+            // shows nothing, and shows a notification itself when the user is not looking at the app (the
+            // socket stays open for a moment after the app leaves the screen, and for the whole of a call).
+            // Not told in time — no ACK goes out, and the server sends it again or as a push.
+            const hidden = typeof document !== "undefined" && document.hidden;
+            if (isNativeApp()) {
+                try {
+                    void push().notifyMessage({
+                        conversationId: chatId, messageId: frame.messageId ?? msg.id, senderId: frame.senderId,
+                        hidden: hidden || isAppBackgrounded(),
+                    }).catch((e) => logger.warn("push: the app did not take a socket message", e as Error));
+                } catch (e) { logger.warn("push: no notifyMessage in this app", e as Error); }
+            }
+
             // ACK delivery (SENT → DELIVERED; advances the server GC watermark).
             dispatch({type: "ws/send", payload: buildChatAck(frame)});
             clearTypingTimer(chatId);
@@ -235,7 +252,6 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             // "Actively viewing" = the chat is open AND the tab is visible. Only then is it truly
             // read; a message that arrives while the tab is hidden is marked unread (and the
             // deferred read fires when the tab regains focus — see useChat).
-            const hidden = typeof document !== "undefined" && document.hidden;
             const active = chatId === selectedChatId && !hidden;
             if (active) {
                 // Read boundary = this just-delivered message's id (a server ULID), so the peer's
@@ -249,7 +265,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                 // against an offline Web Push for the SAME message (both carry the server ULID).
                 // Body: a real text message, else a GENERIC "attachment" — never the file name (it's
                 // noise, and we can't name the sender anyway, so keep it to "new message" + text/attachment).
-                if (hidden) {
+                if (hidden && !isNativeApp()) {   // the Android app shows its own notification (above)
                     const body = secretBody ? i18n.t("chat.encryptedMessage")
                         : msg.kind === "attachment" ? i18n.t("chat.attachment") : (msg.text || "");
                     // Title stays generic here; the SW upgrades it to the sender's NAME from the persistent
