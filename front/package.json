@@ -9,9 +9,10 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc -b",
     "preview": "vite preview",
-    "ci": "npm run lint && npm run typecheck && npm run test && npm run build",
+    "ci": "npm run lint && npm run typecheck && npm run test:cov && npm run build",
     "build:app": "vite build --mode app --outDir dist-app"
   },
   "dependencies": {
@@ -38,6 +39,7 @@
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "dependency-cruiser": "^17.3.6",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

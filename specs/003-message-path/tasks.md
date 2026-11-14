@@ -19,9 +19,9 @@
 
 | История | Ветка | Состояние | Что мешает |
 |---|---|---|---|
-| 1. Стенд и покрытие | `003-harness` | не начата | ответ владельца о пороге (можно начинать с предложенным) |
-| 2. Принятое остаётся | `003-history-store-a`, `-b`, `-c` | не начата | история 1 |
-| 3. Неотправленное | `003-outbox` | не начата | история 1; 3.4 — после 2а |
+| 1. Стенд и покрытие | `003-harness` | слита (№ 29) | ответ владельца о целевом пороге |
+| 2. Принятое остаётся | `003-history-store-a`, `-b`, `-c` | не начата | — |
+| 3. Неотправленное | `003-outbox` | не начата | 3.4 — после 2а |
 | 4. Без дублей | `003-no-duplicates` | не начата | история 2 |
 | 5. Догон | `003-catchup` | не начата | история 2 |
 | 6. Порядок в коде | `003-cleanup` | не начата | истории 2–5 |
@@ -35,8 +35,8 @@
 
 **Цель**: тест пути сообщения пишется в десять строк на настоящих частях; CI считает покрытие и держит порог.
 
-- [ ] T300 [US1] Поставить `@vitest/coverage-v8`; `npm run test:cov` в `front/package.json`; снять покрытие `main` по файлам пути сообщения и записать числа в PR и в таблицу ниже
-- [ ] T301 [US1] Список файлов пути сообщения — в `front/vitest.config.ts` (`coverage.include`), один источник. Начальный состав:
+- [x] T300 [US1] Поставить `@vitest/coverage-v8`; `npm run test:cov` в `front/package.json`; снять покрытие `main` по файлам пути сообщения и записать числа в PR и в таблицу ниже
+- [x] T301 [US1] Список файлов пути сообщения — в `front/vitest.config.ts` (`coverage.include`), один источник. Начальный состав:
   - `src/infrastructure/middleware/wsMiddleware.ts`, `src/infrastructure/slices/websocketSlice.ts`, `src/infrastructure/ws/frameBridge.ts`
   - `src/features/chat/middleware/chatMiddleware.ts` (после T372 — его части)
   - `src/features/chat/rest/chatApi.ts`, `src/features/chat/thunk/*.ts`
@@ -45,19 +45,65 @@
   - `src/features/chat/db/db.ts`, `db/sealed.ts`
   - `src/store/store.ts`, `src/store/logout.ts`, `src/features/auth/middleware/authErrorMiddleware.ts`
   - `src/infrastructure/native/NativeAppBridge.tsx`, `appLifecycle.ts`
-- [ ] T302 [US1] Стенд `front/src/__path__/bench.ts` (сценарий 1.1): настоящее хранилище приложения (`configureAppStore`) с настоящим `wsMiddleware` поверх поддельного `WebSocket`; сервер — ответы по требованию теста (`history(chat).answer(rows)`, `.fail()`, `.status(401)`), запись ушедших кадров; приложение — `installFakeApp` (Vault открыт или закрыт, `notifyMessage` отвечает, молчит, отказывает); `restart()` — новое хранилище на том же диске; `signIn(user)` — проверка владельца как в `RequireAuth`
-- [ ] T303 [US1] Перенести A1–A7 из `front/src/__audit__/delivery.poc.test.ts` и `foreignQueue.poc.test.ts` на стенд, не меняя утверждений (сценарий 1.2). Старые файлы удалить
-- [ ] T304 [US1] Тест `front/src/__path__/matrix.test.ts`: читает `specs/003-message-path/test-matrix.md` и имена тестов в `__path__`; падает, если у сценария слитой истории (отметка в «Состоянии») нет теста или у теста нет строки (сценарий 1.4)
-- [ ] T305 [US1] Порог в `vitest.config.ts`: строки 90 %, ветви 80 % по списку T301. Пока истории 2–5 не слиты, порог равен снятому в T300 и поднимается в каждом PR до целевого; целевой включается в T376. `npm run ci` зовёт `test:cov` (сценарий 1.3)
-- [ ] T306 [US1] Проверить порог: PR с временно удалённым тестом получает красный `front`; записать ссылку на прогон в PR
-- [ ] T307 [P] [US1] Тест случайного чередования (SC-005) на стенде: 1000 прогонов с зерном в сообщении об ошибке; сейчас падает — пометить ожидаемо падающим (`it.fails`) до T317
-- [ ] T308 [P] [US1] `front/README` — раздел «Тесты пути сообщения»: как писать на стенде, что нельзя подделывать, как читать отчёт покрытия
+- [x] T302 [US1] Стенд `front/src/__path__/bench.ts` (сценарий 1.1): настоящее хранилище приложения (`configureAppStore`) с настоящим `wsMiddleware` поверх поддельного `WebSocket`; сервер — ответы по требованию теста (`history(chat).answer(rows)`, `.fail()`, `.status(401)`), запись ушедших кадров; приложение — `installFakeApp` (Vault открыт или закрыт, `notifyMessage` отвечает, молчит, отказывает); `restart()` — новое хранилище на том же диске; `signIn(user)` — проверка владельца как в `RequireAuth`
+- [x] T303 [US1] Перенести A1–A7 из `front/src/__audit__/delivery.poc.test.ts` и `foreignQueue.poc.test.ts` на стенд, не меняя утверждений (сценарий 1.2). Старые файлы удалить
+- [x] T304 [US1] Тест `front/src/__path__/matrix.test.ts`: читает `specs/003-message-path/test-matrix.md` и имена тестов в `__path__`; падает, если у сценария слитой истории (отметка в «Состоянии») нет теста или у теста нет строки (сценарий 1.4)
+- [x] T305 [US1] Порог в `vitest.config.ts`: строки 90 %, ветви 80 % по списку T301. Пока истории 2–5 не слиты, порог равен снятому в T300 и поднимается в каждом PR до целевого; целевой включается в T376. `npm run ci` зовёт `test:cov` (сценарий 1.3)
+- [x] T306 [US1] Проверить порог: PR с временно удалённым тестом получает красный `front`; записать ссылку на прогон в PR. Сделано: временный PR № 30 без `sendOutboxThunk.test.ts` — [прогон 43591472634](https://github.com/android-messenger/messenger-ui/actions/runs/43591472634), «Coverage for lines (79.62%) does not meet global threshold (80%)»; PR закрыт без слияния
+- [x] T307 [P] [US1] Тест случайного чередования (SC-005) на стенде: 1000 прогонов с зерном в сообщении об ошибке; сейчас падает — пометить ожидаемо падающим (`it.fails`) до T317
+- [x] T308 [P] [US1] `front/README` — раздел «Тесты пути сообщения»: как писать на стенде, что нельзя подделывать, как читать отчёт покрытия
 
-**Покрытие на `main` до работ** (заполняет T300):
+**Что вышло в истории 1 иначе, чем записано выше**
+
+- Тесты берут модули приложения из стенда (`bench.m`), а не импортом в начале файла: стенд на каждый запуск и перезапуск загружает модули заново, поэтому всё, что код держит в переменных модулей, начинается пустым, как после настоящего запуска.
+- `signIn` стенда зовёт настоящую функцию `features/auth/model/enterSession.ts`. Она вынесена из `RequireAuth` без изменения поведения; файл добавлен в список T301.
+- Тесты стенда лежат в `front/src/__path__/`: `bench.test.ts` (1.1), `audit.test.ts` (1.2, A1–A7), `matrix.test.ts` (1.3, 1.4), `interleaving.test.ts` (SC-005).
+- Тест случайного чередования: 1000 прогонов по 10 шагов, 22 с. Сегодня подтверждённое сообщение теряют 499 прогонов из 1000 — помечен `it.fails` до T317.
+- Проверка таблицы читает отметку «слита» в таблице «Состояние» этого файла: историю отмечает тот же PR, который её делает.
+- Тесты, читающие исходники как текст, берут их из `virtual:repo-text` (модуль в `vitest.config.ts`), а не через `?raw`. С `?raw` покрытие считало файл, который не запускает ни один тест, покрытым на 100 %: первое измерение дало 89,4 % строк и 76,9 % ветвей, верное — в таблице ниже.
+- `front/src/testSetup.ts`: каждый файл тестов в конце ждёт два кадра анимации. Без этого отложенное уведомление подписчиков хранилища иногда срабатывало после закрытия страницы и роняло весь прогон (на `main` редко, с долгими тестами стенда — в каждом четвёртом прогоне).
+
+**Порог сейчас**: строки 80 %, ветви 69 % — то, чего достигают тесты после истории 1, с округлением вниз. Каждый следующий PR поднимает его до достигнутого; T376 ставит целевой.
+
+**Покрытие на `main` до работ** (T300; `54d808d`, 591 тест, строки и ветви в процентах):
 
 | Файл | Строки | Ветви |
 |---|---|---|
-| | | |
+| **всего** | 79.03 | 69.15 |
+| `src/features/auth/middleware/authErrorMiddleware.ts` | 100 | 93.75 |
+| `src/features/chat/db/db.ts` | 96.62 | 78.78 |
+| `src/features/chat/db/sealed.ts` | 96.77 | 96.42 |
+| `src/features/chat/hooks/useChatAttachments.ts` | 0 | 0 |
+| `src/features/chat/hooks/useChatMessages.ts` | 0 | 0 |
+| `src/features/chat/hooks/useMessageComposer.ts` | 95.65 | 78.12 |
+| `src/features/chat/hooks/useOutboxRetry.ts` | 100 | 100 |
+| `src/features/chat/hooks/useOutboxStatus.ts` | 100 | 75 |
+| `src/features/chat/hooks/useReadReceipts.ts` | 100 | 83.33 |
+| `src/features/chat/hooks/useReconnectCatchup.ts` | 100 | 95.45 |
+| `src/features/chat/hooks/useWindowedHistory.ts` | 0 | 0 |
+| `src/features/chat/middleware/chatMiddleware.ts` | 94.44 | 77.84 |
+| `src/features/chat/model/drafts.ts` | 97.91 | 95.55 |
+| `src/features/chat/model/historyCache.ts` | 100 | 92.3 |
+| `src/features/chat/model/historySync.ts` | 100 | 100 |
+| `src/features/chat/model/mapper.ts` | 100 | 100 |
+| `src/features/chat/model/reconcileHistory.ts` | 100 | 100 |
+| `src/features/chat/model/sealedLists.ts` | 100 | 100 |
+| `src/features/chat/model/unreadProbe.ts` | 100 | 100 |
+| `src/features/chat/model/services/chatMessages.service.ts` | 74.64 | 59.01 |
+| `src/features/chat/model/slices/chatUiSlice.ts` | 100 | 100 |
+| `src/features/chat/model/slices/outboxSlice.ts` | 85 | 40 |
+| `src/features/chat/rest/chatApi.ts` | 64.28 | 44.15 |
+| `src/features/chat/thunk/loadOlderHistory.ts` | 100 | 94.44 |
+| `src/features/chat/thunk/sendOutboxThunk.ts` | 100 | 100 |
+| `src/infrastructure/middleware/wsMiddleware.ts` | 70.33 | 46.93 |
+| `src/infrastructure/native/NativeAppBridge.tsx` | 0 | 0 |
+| `src/infrastructure/native/appLifecycle.ts` | 66.66 | 100 |
+| `src/infrastructure/slices/websocketSlice.ts` | 78.94 | 100 |
+| `src/infrastructure/ws/frameBridge.ts` | 100 | 80 |
+| `src/store/logout.ts` | 100 | 100 |
+| `src/store/store.ts` | 93.33 | 84 |
+
+После истории 1 (602 теста): всего — строки 80,2, ветви 69,9. Без тестов совсем: `useChatAttachments.ts`, `useChatMessages.ts`, `useWindowedHistory.ts`, `NativeAppBridge.tsx`.
 
 ---
 
@@ -154,7 +200,7 @@
 
 ## Зависимости
 
-- История 1 — раньше всех: без стенда тесты остальных историй писать не на чем.
+- История 1 — раньше всех: без стенда тесты остальных историй писать не на чем. Сделана.
 - 2а → 2б → 2в. T331 — после T311. История 3 без T331 — сразу после истории 1.
 - Истории 4 и 5 — после 2в: правят те же обработчики.
 - История 6 — последней: переносит код, который до неё меняется.

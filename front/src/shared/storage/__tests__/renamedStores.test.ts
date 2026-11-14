@@ -1,9 +1,10 @@
 import "fake-indexeddb/auto";
 import {describe, it, expect, beforeEach} from "vitest";
 import {sweepRenamedStores, LOCAL_STORES, DB_STORES} from "../renamedStores";
-import storesSource from "../../../features/e2ee/lib/stores.ts?raw";
+import {sources as allSources} from "virtual:repo-text";
 
-const sources = import.meta.glob("/src/**/*.{ts,tsx}", {query: "?raw", import: "default", eager: true}) as Record<string, string>;
+const sources = Object.fromEntries(Object.entries(allSources).filter(([p]) => !p.endsWith(".css")));
+const storesSource = allSources["/src/features/e2ee/lib/stores.ts"];
 const open = (name: string) => new Promise<void>((res) => { const r = indexedDB.open(name, 1); r.onsuccess = () => { r.result.close(); res(); }; });
 const dbNames = async () => (await indexedDB.databases()).map((d) => d.name).sort();
 
