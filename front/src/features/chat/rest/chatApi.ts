@@ -53,6 +53,13 @@ export const chatApi = createApi({
             keepUnusedDataFor: 0,
         }),
 
+        // The newest page of the chat's history as the server gave it — for the readHistory thunk
+        // (spec 003, story 2), which merges it into the chatHistory slice. Never cached.
+        getHistoryPage: builder.query<unknown, { chatId: string }>({
+            query: ({chatId}) => `/chats/${chatId}/messages?limit=${HISTORY_PAGE_SIZE}`,
+            keepUnusedDataFor: 0,
+        }),
+
         // --------------------
         // Conversation history (cursor-paginated). chatId === conversationId.
         // --------------------

@@ -5,6 +5,7 @@ import userReducer, {clearUser} from "@/features/auth/slices/userSlice";
 import callReducer, {webrtcConnected, incomingRemoteEnd} from "@/features/call/model/slices/callSlice";
 import wsReducer from "@/infrastructure/slices/websocketSlice.ts";
 import chatUiReducer from "@/features/chat/model/slices/chatUiSlice";
+import chatHistoryReducer from "@/features/chat/model/slices/chatHistorySlice";
 import outboxReducer, { hydrateOutbox, mergeOutbox, markPersisted } from "@/features/chat/model/slices/outboxSlice";
 import presenceReducer from "@/features/presence/model/presenceSlice";
 import stickyChatsReducer, { saveStickyChats, hydrateSticky, clearSticky, STICKY_KEY } from "@/features/chat/model/slices/stickyChatsSlice";
@@ -49,6 +50,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
             outbox: outboxReducer,
             user: userReducer,
             chatUi: chatUiReducer,
+            chatHistory: chatHistoryReducer,
             presence: presenceReducer,
             stickyChats: stickyChatsReducer,
             secretChats: secretChatsReducer,
