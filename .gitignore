@@ -46,3 +46,6 @@ storybook-static/
 data
 data/**
 front/stats.html
+
+# Test coverage report (npm run test:cov)
+front/coverage/
