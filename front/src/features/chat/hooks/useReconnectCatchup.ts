@@ -7,6 +7,11 @@ import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {isStale} from "@/features/chat/model/historySync.ts";
 
+/** The connection of the socket the "unread" marks were last asked under (spec 002 §3.2). */
+let unreadAskedUnder: number | null = null;
+/** Tests. */
+export function resetUnreadAsked(): void { unreadAskedUnder = null; }
+
 /**
  * Catch-up-after-a-gap logic, extracted from the useChat god-hook. Two independent triggers refresh
  * the chat list + the open chat's history so nothing that arrived while we were away is missed:
@@ -34,6 +39,19 @@ export function useReconnectCatchup(params: {
         chatMessagesService.refetchChatsPreservingSelected(dispatch, store.getState);
     }, [dispatch, store]);
 
+    // Spec 002 §3.2: after every connection of the socket (= after every gap, and at the start) the
+    // "unread" marks are taken from the server: fresh chat list first (my read positions), then the
+    // newest message of each chat.
+    // Once per connection: a re-mount of the page under the same connection asks nothing.
+    useEffect(() => {
+        if (wsStatus !== "connected" || unreadAskedUnder === wsEpoch) return;
+        unreadAskedUnder = wsEpoch;
+        void (async () => {
+            await chatMessagesService.refetchChatsPreservingSelected(dispatch, store.getState);
+            if (store.getState().ws.epoch === wsEpoch) await chatMessagesService.probeUnread(dispatch, store.getState);
+        })();
+    }, [wsStatus, wsEpoch, dispatch, store]);
+
     // Read-through ONLY on the actual disconnected→connected transition — NOT on every chat switch.
     const prevWsRef = useRef(wsStatus);
     useEffect(() => {
@@ -41,9 +59,9 @@ export function useReconnectCatchup(params: {
         prevWsRef.current = wsStatus;
         if (wsStatus !== "connected" || was === "connected") return;
         dispatch(flushOutbox());                 // resend anything still queued (idempotent)
-        catchUpChats();                          // refresh the chat list (new convs while offline)
+        // The chat list is refreshed by the unread check above.
         // The open chat's history is read by the stale check below.
-    }, [wsStatus, catchUpChats, dispatch]);
+    }, [wsStatus, dispatch]);
 
     // Spec 002 §3.1: the chat on screen must be provably complete. It is read again whenever it is stale —
     // opened after a gap (also by a notification tap, which comes before the socket is back), or the

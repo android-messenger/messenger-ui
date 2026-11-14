@@ -1,3 +1,6 @@
+import {chatsToProbe, inBatches, isUnread, UNREAD_PROBE_PARALLEL} from "@/features/chat/model/unreadProbe.ts";
+import {markStale} from "@/features/chat/model/historySync.ts";
+import {markChatUnread} from "@/features/chat/model/slices/chatUiSlice.ts";
 import {type AppDispatch, type RootState} from "@/store/store";
 import {chatApi} from "@/features/chat/rest/chatApi";
 import {logger} from "@/shared/logger/logger.ts";
@@ -42,6 +45,30 @@ export const chatMessagesService = {
                     preserveSelectedConversation(draft ?? [], before, selectedChatId)));
             })
             .catch(() => { /* best-effort */ });
+    },
+
+    /**
+     * Spec 002 §3.2: after the chat list is fresh, ask each direct chat for its newest message and mark the
+     * chat unread if that message is not mine and is newer than my read position. Such a chat is also
+     * stale: it is read again when opened. The chat on screen is not asked — it is read in full anyway.
+     */
+    async probeUnread(dispatch: AppDispatch, getState: () => RootState) {
+        const state = getState();
+        const myId = state.user?.id;
+        if (!myId) return;
+        const chats = chatApi.endpoints.getChats.select({myId})(state)?.data ?? [];
+        const onScreen = typeof document !== "undefined" && document.hidden ? null : state.chatUi?.selectedChatId ?? null;
+        const asked = chatsToProbe(chats, onScreen);
+        let marked = 0;
+        await inBatches(asked, UNREAD_PROBE_PARALLEL, async (chat) => {
+            const last = await dispatch(chatApi.endpoints.getLastMessage.initiate(
+                {chatId: chat.conversationId}, {forceRefetch: true, subscribe: false})).unwrap();
+            if (!isUnread(last ?? undefined, myId, chat.myReadId)) return;
+            if (!getState().chatUi?.unreadByChat?.[chat.conversationId]) marked++;
+            markStale(chat.conversationId);
+            dispatch(markChatUnread(chat.conversationId));
+        });
+        logger.info("sync: unread asked", {chats: asked.length, marked});
     },
     async clearChatHistory(dispatch: AppDispatch,
                            deleteHistory: ReturnType<typeof chatApi.useDeleteChatHistoryMutation>[0],

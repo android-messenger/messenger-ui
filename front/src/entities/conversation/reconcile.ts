@@ -80,6 +80,7 @@ export function toChatSummary(c: RawConversation, myId: string): ChatSummary {
         conversationId: c.id,
         kind: "direct",
         counterpartId: (amClient ? c.masterId : c.clientId) as string,
+        myReadId: (amClient ? c.clientReadReceipt : c.masterReadReceipt) ?? undefined,
         updatedAt,
         orderId: c.metadata?.orderId,
         blocked: blockedByMe || blockedByPeer,
