@@ -16,7 +16,7 @@ vi.mock("@/shared/sound/notify.ts", () => ({playNotificationSound: vi.fn()}));
 vi.mock("@/features/notifications/desktopNotification.ts", () => ({showDesktopNotification: vi.fn()}));
 vi.mock("@/shared/i18n", () => ({default: {t: (k: string) => k}}));
 
-const app = vi.hoisted(() => ({native: true, backgrounded: false, order: [] as string[], notify: null as unknown as ReturnType<typeof vi.fn>}));
+const app = vi.hoisted(() => ({native: true, backgrounded: false, order: [] as string[], notify: (() => undefined) as (o: unknown) => unknown}));
 vi.mock("@/shared/platform.ts", () => ({
     isNativeApp: () => app.native,
     push: () => ({notifyMessage: (o: unknown) => app.notify(o)}),
