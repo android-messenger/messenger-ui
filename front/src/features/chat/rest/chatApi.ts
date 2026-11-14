@@ -1,3 +1,5 @@
+import {logger} from "@/shared/logger/logger.ts";
+import {liveEpoch, noteHistoryRead} from "@/features/chat/model/historySync.ts";
 import {createApi, fetchBaseQuery} from "@reduxjs/toolkit/query/react";
 import {type ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema.ts";
 import type {OutboxMessage} from "@/features/chat/model/types.ts";
@@ -55,15 +57,28 @@ export const chatApi = createApi({
             { myId: string; chatId: string }
         >({
             async queryFn({myId, chatId}, api, _extra, baseQuery) {
+                // Spec 002 §3.1: the connection of the socket this read starts under (null — not connected).
+                const wsOf = () => (api.getState() as {ws?: {status?: string; epoch?: number}}).ws;
+                const startedUnder = liveEpoch(wsOf());
                 const res = await baseQuery(`/chats/${chatId}/messages?limit=${HISTORY_PAGE_SIZE}`);
                 // A 404 = a conversation with no message backing yet (e.g. a group whose history endpoint
                 // isn't wired). Treat it as EMPTY, not an error — an errored query leaves RTK's `data`
                 // holding the PREVIOUSLY opened chat's rows, which then render in the new (group) window
                 // (the "1:1 messages leaked into the group" bug). Fall THROUGH (raw=undefined → [] rows)
                 // so the outbox re-graft below still runs and a just-sent pending group message survives.
-                if (res.error && (res.error as {status?: number}).status !== 404) return {error: res.error};
+                if (res.error && (res.error as {status?: number}).status !== 404) {
+                    logger.info("sync: history read failed", {chatId, status: (res.error as {status?: unknown}).status});
+                    return {error: res.error};
+                }
                 const raw = res.error ? undefined : res.data;
                 const messages = dedupMessages(toMessages(raw));
+                const proved = noteHistoryRead(chatId, startedUnder, wsOf());
+                logger.info("sync: history read", {chatId, rows: messages.length, complete: proved});
+                // Read while the socket was down or changing, and it is up now: the answer may miss what came
+                // in between. Read once more under the live connection (after this request has settled).
+                if (!proved && liveEpoch(wsOf()) !== null) {
+                    setTimeout(() => { void api.dispatch(chatApi.endpoints.getChatHistory.initiate({myId, chatId}, {forceRefetch: true, subscribe: false})); }, 0);
+                }
 
                 // ✓✓ source of truth (backend contract): the response is an envelope
                 // { messages, peerLastReadId } where peerLastReadId is the peer's read watermark

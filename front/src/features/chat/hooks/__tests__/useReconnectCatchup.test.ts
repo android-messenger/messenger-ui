@@ -14,6 +14,7 @@ vi.mock("@/features/chat/thunk/sendOutboxThunk.ts", () => ({
 import {useReconnectCatchup} from "../useReconnectCatchup";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
+import {forgetHistorySync, markStale, noteHistoryRead} from "@/features/chat/model/historySync.ts";
 
 const refetch = vi.mocked(chatMessagesService.refetchChatsPreservingSelected);
 const flush = vi.mocked(flushOutbox);
@@ -25,10 +26,18 @@ function setVisibility(v: "visible" | "hidden") {
 function makeStore(initialStatus: string) {
     return configureStore({
         reducer: {
-            ws: (state = {status: initialStatus}, action: {type: string; status?: string}) =>
-                action.type === "test/ws" ? {status: action.status!} : state,
+            // epoch: the number of the socket's connection, +1 on every connect (as in websocketSlice)
+            ws: (state = {status: initialStatus, epoch: initialStatus === "connected" ? 1 : 0}, action: {type: string; status?: string}) =>
+                action.type === "test/ws"
+                    ? {status: action.status!, epoch: state.epoch + (action.status === "connected" ? 1 : 0)}
+                    : state,
         },
     });
+}
+
+/** The chat's history was read from the server under the current connection: it is complete. */
+function complete(store: ReturnType<typeof makeStore>, chatId: string) {
+    noteHistoryRead(chatId, store.getState().ws.epoch, store.getState().ws);
 }
 
 function wrap(store: ReturnType<typeof makeStore>) {
@@ -38,6 +47,7 @@ function wrap(store: ReturnType<typeof makeStore>) {
 beforeEach(() => {
     refetch.mockClear();
     flush.mockClear();
+    forgetHistorySync();
     setVisibility("visible");
 });
 afterEach(() => setVisibility("visible"));
@@ -86,6 +96,7 @@ describe("useReconnectCatchup", () => {
     it("resume while visible refreshes list + open history", () => {
         setVisibility("visible");
         const store = makeStore("connected");
+        complete(store, "c1");
         const reload = vi.fn(() => Promise.resolve());
         renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
         act(() => { document.dispatchEvent(new Event("visibilitychange")); });
@@ -96,10 +107,60 @@ describe("useReconnectCatchup", () => {
     it("resume while hidden does nothing", () => {
         setVisibility("hidden");
         const store = makeStore("connected");
+        complete(store, "c1");
         const reload = vi.fn(() => Promise.resolve());
         renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
         act(() => { document.dispatchEvent(new Event("visibilitychange")); });
         expect(refetch).not.toHaveBeenCalled();
         expect(reload).not.toHaveBeenCalled();
+    });
+
+    // ---- spec 002 §3.1: the sign that the socket had a gap ----
+    it("a chat opened stale is read; a chat that is complete is not read again", () => {
+        const store = makeStore("connected");
+        complete(store, "c1");
+        const reload = vi.fn(() => Promise.resolve());
+        const {rerender} = renderHook(
+            (props: {id: string}) => useReconnectCatchup({selectedChatId: props.id, reloadChatHistory: reload}),
+            {wrapper: wrap(store), initialProps: {id: "c1"}});
+        expect(reload).not.toHaveBeenCalled();          // c1 is complete
+        rerender({id: "c2"});                            // c2 was never read under this connection
+        expect(reload).toHaveBeenCalledTimes(1);
+        complete(store, "c2");
+        rerender({id: "c1"});                            // back to a complete chat: no request
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("after a gap the chat on screen is read once the socket is back, whatever closed it", () => {
+        const store = makeStore("connected");
+        complete(store, "c1");
+        const reload = vi.fn(() => Promise.resolve());
+        renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
+        act(() => { store.dispatch({type: "test/ws", status: "disconnected"}); });
+        expect(reload).not.toHaveBeenCalled();          // nothing to read from while the socket is down
+        act(() => { store.dispatch({type: "test/ws", status: "connected"}); });
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("a notification tap that opens a chat before the socket is back: the chat is read when it connects", () => {
+        const store = makeStore("disconnected");
+        const reload = vi.fn(() => Promise.resolve());
+        const {rerender} = renderHook(
+            (props: {id: string | null}) => useReconnectCatchup({selectedChatId: props.id, reloadChatHistory: reload}),
+            {wrapper: wrap(store), initialProps: {id: null as string | null}});
+        rerender({id: "c9"});                            // the tap
+        expect(reload).not.toHaveBeenCalled();
+        act(() => { store.dispatch({type: "test/ws", status: "connected"}); });
+        expect(reload).toHaveBeenCalledTimes(1);
+    });
+
+    it("markStale is how a push or a tap asks for one chat to be read again", () => {
+        const store = makeStore("connected");
+        complete(store, "c1");
+        expect(store.getState().ws.epoch).toBe(1);
+        markStale("c1");
+        const reload = vi.fn(() => Promise.resolve());
+        renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
+        expect(reload).toHaveBeenCalledTimes(1);
     });
 });

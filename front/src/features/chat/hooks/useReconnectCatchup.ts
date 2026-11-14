@@ -5,6 +5,7 @@ import type {AppDispatch, RootState} from "@/store/store";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {logger} from "@/shared/logger/logger.ts";
+import {isStale} from "@/features/chat/model/historySync.ts";
 
 /**
  * Catch-up-after-a-gap logic, extracted from the useChat god-hook. Two independent triggers refresh
@@ -27,6 +28,7 @@ export function useReconnectCatchup(params: {
     const dispatch = useDispatch<AppDispatch>();
     const store = useStore<RootState>();
     const wsStatus = useSelector((state: RootState) => state.ws.status);
+    const wsEpoch = useSelector((state: RootState) => state.ws.epoch);
 
     const catchUpChats = useCallback(() => {
         chatMessagesService.refetchChatsPreservingSelected(dispatch, store.getState);
@@ -40,8 +42,18 @@ export function useReconnectCatchup(params: {
         if (wsStatus !== "connected" || was === "connected") return;
         dispatch(flushOutbox());                 // resend anything still queued (idempotent)
         catchUpChats();                          // refresh the chat list (new convs while offline)
-        if (selectedChatId) Promise.resolve(reloadChatHistory()).catch(logger.error); // missed history
-    }, [wsStatus, selectedChatId, reloadChatHistory, catchUpChats, dispatch]);
+        // The open chat's history is read by the stale check below.
+    }, [wsStatus, catchUpChats, dispatch]);
+
+    // Spec 002 §3.1: the chat on screen must be provably complete. It is read again whenever it is stale —
+    // opened after a gap (also by a notification tap, which comes before the socket is back), or the
+    // socket has just connected again. A chat read under the current connection is left alone.
+    useEffect(() => {
+        if (!selectedChatId || wsStatus !== "connected") return;
+        if (!isStale(selectedChatId, store.getState().ws)) return;
+        logger.info("sync: chat is stale, reading its history", {chatId: selectedChatId, epoch: wsEpoch});
+        Promise.resolve(reloadChatHistory()).catch(() => {});
+    }, [selectedChatId, wsStatus, wsEpoch, reloadChatHistory, store]);
 
     // Catch up over REST on RESUME from background / network recovery — independent of the WS state.
     useEffect(() => {
