@@ -5,7 +5,7 @@ import userReducer, {clearUser} from "@/features/auth/slices/userSlice";
 import callReducer, {webrtcConnected, incomingRemoteEnd} from "@/features/call/model/slices/callSlice";
 import wsReducer from "@/infrastructure/slices/websocketSlice.ts";
 import chatUiReducer from "@/features/chat/model/slices/chatUiSlice";
-import chatHistoryReducer from "@/features/chat/model/slices/chatHistorySlice";
+import chatHistoryReducer, {historyForgotten, ROW_ACTIONS} from "@/features/chat/model/slices/chatHistorySlice";
 import outboxReducer, { hydrateOutbox, mergeOutbox, markPersisted } from "@/features/chat/model/slices/outboxSlice";
 import presenceReducer from "@/features/presence/model/presenceSlice";
 import stickyChatsReducer, { saveStickyChats, hydrateSticky, clearSticky, STICKY_KEY } from "@/features/chat/model/slices/stickyChatsSlice";
@@ -59,7 +59,14 @@ export function configureAppStore(webRTCService: WebRTCService) {
             [idsApi.reducerPath]: idsApi.reducer,
         },
         middleware: (getDefaultMiddleware) =>
-            getDefaultMiddleware().prepend(authErrorListener.middleware).concat(
+            // A message's time (createdAt) is a Date, in the rows of the chatHistory slice and in the actions
+            // that carry rows: the development check of serializable values leaves them alone.
+            getDefaultMiddleware({
+                serializableCheck: {
+                    ignoredPaths: ["chatHistory"],
+                    ignoredActions: ROW_ACTIONS,
+                },
+            }).prepend(authErrorListener.middleware).concat(
                 chatApi.middleware,
                 contactsApi.middleware,
                 idsApi.middleware,
@@ -242,6 +249,7 @@ export const dropForeignCache = () => async (dispatch: AppDispatch, getState: ()
     if (sealing()) setListsReady(false);
     dispatch(clearSecretChats());
     dispatch(clearSticky());
+    dispatch(historyForgotten());
     clearAllDrafts();
     await clearAllLocalData().catch(() => { /* best-effort */ });
     if (sealing()) void restoreSealed({dispatch, getState});

@@ -17,7 +17,7 @@ import {setAppBackgrounded} from "./appLifecycle.ts";
 import {tapRoute} from "./tapRoute.ts";
 import {noteNativeAccept} from "@/features/call/model/nativeAccept.ts";
 import {useNativeCall} from "./useNativeCall.ts";
-import {markStale} from "@/features/chat/model/historySync.ts";
+import {historyStale} from "@/features/chat/model/slices/chatHistorySlice.ts";
 
 export default function NativeAppBridge() {
     const dispatch = useDispatch();
@@ -44,7 +44,7 @@ export default function NativeAppBridge() {
             // S1 §7.3: already accepted on the native screen — remembered here, not in the address
             if (d.call?.accept && d.call.callerId && d.call.conversationId) noteNativeAccept(d.call.callerId, d.call.conversationId);
             // spec 002 §3.1: the notification says this chat got something outside the socket — read it again
-            if (d.conversationId) markStale(d.conversationId);
+            if (d.conversationId) dispatch(historyStale({chatId: d.conversationId}));
             const route = tapRoute(d);
             if (route) navigate(route);
         }));

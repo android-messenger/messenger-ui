@@ -8,12 +8,6 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/features/chat/rest/chatApi.ts", () => ({
     chatApi: {
-        // Capture (endpoint, args, recipe) so a test can invoke the draft mutator directly.
-        util: {
-            updateQueryData: vi.fn((endpoint, args, recipe) => ({
-                type: "test/updateQueryData", endpoint, args, recipe,
-            })),
-        },
         endpoints: {
             getChats: {select: vi.fn(() => () => ({data: h.getChatsData}))},
         },
@@ -50,6 +44,8 @@ import {playNotificationSound} from "@/shared/sound/notify.ts";
 import {showDesktopNotification} from "@/features/notifications/desktopNotification.ts";
 import {markSent} from "@/features/chat/model/slices/outboxSlice.ts";
 import {markChatUnread} from "@/features/chat/model/slices/chatUiSlice.ts";
+import historyReducer, {type ChatHistoryState} from "@/features/chat/model/slices/chatHistorySlice.ts";
+import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema.ts";
 
 const SERVER_ID = "01KY29D4BHHB40EW2FKMHR6V7M";
 const CLIENT_ID = "nano_abc123";
@@ -69,9 +65,15 @@ function harness(selectedChatId: string | null) {
 }
 
 const sends = (d: Dispatched[]) => d.filter((a) => a.type === "ws/send").map((a) => a.payload as Record<string, unknown>);
-const recipe = (d: Dispatched[], endpoint: string) => {
-    const found = d.find((a) => a.type === "test/updateQueryData" && a.endpoint === endpoint);
-    return found?.recipe as ((draft: unknown[]) => void) | undefined;
+// The rows of chat c1 after the REAL reducer of the slice took everything the middleware dispatched,
+// starting from a chat that already holds `before`.
+const rowsAfter = (d: Dispatched[], before: Array<Partial<ChatMessage>>) => {
+    const chatId = "c1";
+    const rows = before as ChatMessage[];
+    const state: ChatHistoryState = {
+        byChat: {[chatId]: {rows, held: [], reading: 0, arrived: [], readEpoch: null, error: false, fromDisk: false, noOlder: false}},
+    };
+    return d.reduce((s, a) => historyReducer(s, a), state).byChat[chatId].rows ?? [];
 };
 
 function setHidden(v: boolean) {
@@ -104,26 +106,21 @@ describe("chatMiddleware — CHAT_OUT (live delivery)", () => {
     it("appends a new message to the open history", () => {
         const {dispatched, run} = harness("c1");
         run(chatOut());
-        const draft: Array<{id?: string; clientId?: string}> = [];
-        recipe(dispatched, "getChatHistory")?.(draft);
-        expect(draft).toHaveLength(1);
-        expect(draft[0]).toMatchObject({id: SERVER_ID, clientId: CLIENT_ID, chatId: "c1", text: "hi"});
+        const rows = rowsAfter(dispatched, []);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({id: SERVER_ID, clientId: CLIENT_ID, chatId: "c1", text: "hi"});
     });
 
     it("dedups a duplicate live delivery by server id", () => {
         const {dispatched, run} = harness("c1");
         run(chatOut());
-        const draft = [{id: SERVER_ID, clientId: "other"}];
-        recipe(dispatched, "getChatHistory")?.(draft);
-        expect(draft).toHaveLength(1);
+        expect(rowsAfter(dispatched, [{id: SERVER_ID, clientId: "other"}])).toHaveLength(1);
     });
 
     it("dedups a lost-ACK resend by clientId (client messageId)", () => {
         const {dispatched, run} = harness("c1");
         run(chatOut());
-        const draft = [{id: "different-server-id", clientId: CLIENT_ID}];
-        recipe(dispatched, "getChatHistory")?.(draft);
-        expect(draft).toHaveLength(1);
+        expect(rowsAfter(dispatched, [{id: "different-server-id", clientId: CLIENT_ID}])).toHaveLength(1);
     });
 
     it("ACKs the delivery (ws/send with correlationId = delivered messageId)", () => {
@@ -202,10 +199,10 @@ describe("chatMiddleware — CHAT_ACK (outbox reconcile)", () => {
     it("reconciles the optimistic echo: swaps temp id → server ULID and stamps server time", () => {
         const {dispatched, run} = harness("c1");
         run(ack());
-        const draft = [{id: CLIENT_ID, clientId: CLIENT_ID, createdAt: new Date(0)}];
-        recipe(dispatched, "getChatHistory")?.(draft);
-        expect(draft[0].id).toBe(SERVER_ID);
-        expect((draft[0].createdAt as Date).getTime()).toBe(1_700_000_123_000);
+        const rows = rowsAfter(dispatched, [{id: CLIENT_ID, clientId: CLIENT_ID, createdAt: new Date(0)}]);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].id).toBe(SERVER_ID);
+        expect(rows[0].createdAt.getTime()).toBe(1_700_000_123_000);
     });
 
     it("ignores a CHAT_ACK with no correlationId", () => {

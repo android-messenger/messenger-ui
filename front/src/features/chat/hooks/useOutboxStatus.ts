@@ -2,7 +2,7 @@ import {useCallback, useMemo} from "react";
 import {useDispatch, useSelector} from "react-redux";
 
 import type {AppDispatch, RootState} from "@/store/store";
-import {chatApi} from "@/features/chat/rest/chatApi.ts";
+import {rowRemoved} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {retryMessage as retryOutboxMessage, discardMessage as discardOutboxMessage} from "@/features/chat/model/slices/outboxSlice.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import type {ChatMessageStatus} from "@/features/chat/model/types.ts";
@@ -13,8 +13,8 @@ import type {ChatMessageStatus} from "@/features/chat/model/types.ts";
  * (drop from the outbox AND splice the optimistic row out of the open history, since it was never
  * accepted by the server).
  */
-export function useOutboxStatus(params: {selectedChatId: string | null; myId: string}) {
-    const {selectedChatId, myId} = params;
+export function useOutboxStatus(params: {selectedChatId: string | null}) {
+    const {selectedChatId} = params;
     const dispatch = useDispatch<AppDispatch>();
 
     const outboxMessages = useSelector((state: RootState) => state.outbox.messages);
@@ -32,13 +32,8 @@ export function useOutboxStatus(params: {selectedChatId: string | null; myId: st
     const discardMessage = useCallback((id: string) => {
         dispatch(discardOutboxMessage(id));
         // Also drop the optimistic row from the open history (it was never accepted by the server).
-        if (selectedChatId) {
-            dispatch(chatApi.util.updateQueryData("getChatHistory", {myId, chatId: selectedChatId}, (draft) => {
-                const i = draft.findIndex((m) => m.id === id);
-                if (i >= 0) draft.splice(i, 1);
-            }));
-        }
-    }, [dispatch, myId, selectedChatId]);
+        if (selectedChatId) dispatch(rowRemoved({chatId: selectedChatId, id}));
+    }, [dispatch, selectedChatId]);
 
     return {outboxStatusById, retryMessage, discardMessage};
 }

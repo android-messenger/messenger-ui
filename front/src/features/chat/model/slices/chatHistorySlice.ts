@@ -10,7 +10,7 @@ import {mergeHistory} from "@/features/chat/model/mergeHistory";
 // chat. Here a chat holds its rows as long as the user is signed in; the socket writes to it whether it
 // is on the screen or not, and an answer of the history is merged in (mergeHistory), never put instead.
 //
-// The slice also holds the sign that the socket had a gap (spec 002 §3.1, formerly historySync.ts): a
+// The slice also holds the sign that the socket had a gap (spec 002 §3.1; before story 2 it was a module of its own): a
 // chat counts as complete only while its history was read from the server under the CURRENT connection
 // of the socket, by a request that started when the socket was already connected. Any gap gives a new
 // connection number, so every chat is stale at once.
@@ -172,12 +172,12 @@ const chatHistorySlice = createSlice({
             if (i >= 0) chat!.rows!.splice(i, 1);
         },
 
-        /** Put a row back (the server refused to delete it). */
-        rowRestored(state, action: PayloadAction<{chatId: string; row: ChatMessage}>) {
-            const chat = state.byChat[action.payload.chatId];
-            if (!chat?.rows) return;
-            upsertMessage(chat.rows, action.payload.row);
-            chat.rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+        /** Put a row back where it was (the server refused to delete it): `index` — its place before. */
+        rowRestored(state, action: PayloadAction<{chatId: string; row: ChatMessage; index: number}>) {
+            const {chatId, row, index} = action.payload;
+            const rows = state.byChat[chatId]?.rows;
+            if (!rows || rows.some((m) => sameMessage(m, row))) return;
+            rows.splice(Math.min(Math.max(index, 0), rows.length), 0, row);
         },
 
         /** The chat was cleared: no rows, nothing older. */
@@ -207,6 +207,9 @@ export const {
     rowFixed, rowRemoved, rowRestored, chatCleared, historyStale, historyForgotten,
 } = chatHistorySlice.actions;
 export default chatHistorySlice.reducer;
+
+/** The actions that carry rows (a row's time is a Date). */
+export const ROW_ACTIONS: string[] = [socketRow, answerTaken, olderTaken, diskTaken, echoPut, rowRestored].map((a) => a.type);
 
 // ---- reading the slice ---------------------------------------------------------------------------
 

@@ -4,53 +4,16 @@ import {bench, stop, row} from "./bench";
 // Audit 2026-11-14 (specs/002-reliable-delivery/audit.md), findings A1–A7, on the bench of spec 003.
 // Every test here states the behaviour AS IT IS NOW — a defect. The pull request that fixes a defect turns
 // its test over and gives it the number of its scenario (specs/003-message-path/test-matrix.md).
+// Turned over so far: A1 and A2 — scenarios 2.1 and 2.2 in history.test.ts.
 
 const MY = "me";
 const PEER = "peer";
 const CHAT = "c1";
 const M1 = "01ARZ3NDEKTSV4RRFFQ69G5FA1";
-const M2 = "01ARZ3NDEKTSV4RRFFQ69G5FA2";
 const msg = (id: string, from: string, body: string) => row({id, chat: CHAT, from, to: from === MY ? PEER : MY, body});
 
 describe("1.2: the audit findings A1–A7 run on the bench", () => {
     afterEach(stop);
-
-    it("A1: a message that comes over the socket while the history is read again is acknowledged, then wiped by the answer — and the chat counts as complete", async () => {
-        const b = await bench();
-        await b.signIn(MY);
-        b.socket.connect();
-        const chat = b.open(CHAT);
-        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
-        await chat.read;
-        expect(b.screen(CHAT)?.map((m) => m.id)).toEqual([M1]);
-
-        // The chat is read again (return to the screen, an attachment was sent, "retry"). The server reads its
-        // table, and only then stores and delivers the next message: the answer on its way does not hold it.
-        const reread = chat.reread();
-        b.socket.frame(msg(M2, PEER, "second"));
-        expect(b.screen(CHAT)?.map((m) => m.id)).toEqual([M1, M2]);              // shown for a moment
-        expect(b.socket.sent("CHAT_ACK")).toHaveLength(1);                       // the server will not send it again
-
-        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
-        await reread;
-        expect(b.screen(CHAT)?.map((m) => m.id)).toEqual([M1]);                  // DEFECT: the message is gone from the screen
-        expect(b.stale(CHAT)).toBe(false);                                       // DEFECT: nothing will read the chat again
-        await b.settle();
-        expect(b.server.history(CHAT).asked()).toBe(2);
-    });
-
-    it("A2: the same while the chat is read for the first time — the message is acknowledged and never shown", async () => {
-        const b = await bench();
-        await b.signIn(MY);
-        b.socket.connect();
-        const chat = b.open(CHAT);
-        b.socket.frame(msg(M2, PEER, "second"));
-        expect(b.socket.sent("CHAT_ACK")).toHaveLength(1);
-        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
-        await chat.read;
-        expect(b.screen(CHAT)?.map((m) => m.id)).toEqual([M1]);                  // DEFECT
-        expect(b.stale(CHAT)).toBe(false);                                       // DEFECT
-    });
 
     it("A3: a 401 on any request empties the send queue — the unsent messages are gone", async () => {
         const b = await bench();

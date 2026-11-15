@@ -2,7 +2,7 @@ import {useCallback, useEffect} from "react";
 import {useDispatch, useSelector, useStore} from "react-redux";
 
 import type {AppDispatch, RootState} from "@/store/store";
-import {chatApi} from "@/features/chat/rest/chatApi.ts";
+import {selectRows} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {buildReadIn} from "@/features/chat/model/schema/wireMessage.schema.ts";
 import {isUlid} from "@/shared/ulid/ulid.ts";
 
@@ -28,19 +28,18 @@ export function useReadReceipts(params: {
     const {selectedChatId, newestMessageId, getSummary, markRead} = params;
     const dispatch = useDispatch<AppDispatch>();
     const store = useStore<RootState>();
-    const myId = useSelector((s: RootState) => s.user.id);
     const wsStatus = useSelector((s: RootState) => s.ws.status);
 
     // Newest id in a chat that is a real server ULID (skips our own not-yet-reconciled temp client
     // ids). READ_IN carries this as the read boundary the peer stores + uses for ✓✓.
     const lastReadMessageId = useCallback((chatId: string): string | undefined => {
-        const data = chatApi.endpoints.getChatHistory.select({myId, chatId})(store.getState())?.data;
+        const data = selectRows(store.getState(), chatId);
         if (!data) return undefined;
         for (let i = data.length - 1; i >= 0; i--) {
             if (isUlid(data[i].id)) return data[i].id;
         }
         return undefined;
-    }, [myId, store]);
+    }, [store]);
 
     // Send a READ_IN for chatId carrying the newest rendered server ULID as the read boundary.
     // requireBoundary: skip when the boundary is unknown (used by the connect / newest triggers).

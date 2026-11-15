@@ -1,7 +1,7 @@
 import type {ChatMessage} from "./schema/domainChatMessage.schema";
 
 /**
- * The ONE canonical identity + insert rule for the getChatHistory RTK Query cache. Every writer (live
+ * The ONE canonical identity + insert rule for the rows of a chat (the chatHistory slice). Every writer (live
  * CHAT_OUT append, optimistic-echo enqueue, older-page prepend) must dedup through here so the rule
  * can't drift (it previously diverged: id-only vs id-or-clientId across the writers).
  *

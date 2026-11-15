@@ -14,10 +14,8 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/features/chat/rest/chatApi.ts", () => ({
     chatApi: {
-        util: {updateQueryData: vi.fn((endpoint: string, args: unknown, recipe: unknown) => ({type: "test/updateQueryData", endpoint, args, recipe}))},
         endpoints: {
             getChats: {select: vi.fn(() => () => ({data: [{conversationId: "c1"}]}))},
-            getChatHistory: {matchFulfilled: (a: {type?: string}) => a?.type === "test/historyFulfilled"},
         },
     },
 }));
@@ -37,11 +35,14 @@ vi.mock("@/features/e2ee", () => ({
 
 import {chatMiddleware} from "../chatMiddleware";
 import secretChats, {unmarkSecret} from "@/features/chat/model/slices/secretChatsSlice";
+import chatHistory, {answerTaken, diskTaken, selectRows} from "@/features/chat/model/slices/chatHistorySlice";
+import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 
 function makeStore() {
     return configureStore({
         reducer: {
             secretChats,
+            chatHistory,
             user: () => ({id: "me"}),
             chatUi: () => ({selectedChatId: "c1"}),
         },
@@ -49,6 +50,10 @@ function makeStore() {
     });
 }
 const isSecret = (s: ReturnType<typeof makeStore>, id: string) => !!s.getState().secretChats.byId[id];
+
+// An answer of the history, as the store gets it once it is merged into the chat.
+const history = (chatId: string, rows: Array<{id: string; from: string; text: string}>) =>
+    answerTaken({chatId, answer: rows as ChatMessage[], whole: true, epoch: null});
 
 const incoming = (body: string, conversationId = "c1") => ({
     type: "ws/incoming",
@@ -86,11 +91,7 @@ describe("secret mode follows the encrypted messages", () => {
 
     it("the mark comes back from the history when the device has forgotten it", () => {
         const store = makeStore();   // nothing remembered: a cleared localStorage or a new install
-        store.dispatch({
-            type: "test/historyFulfilled",
-            meta: {arg: {originalArgs: {myId: "me", chatId: "c7"}}},
-            payload: [{id: "1", from: "peer", text: "old clear text"}, {id: "2", from: "peer", text: "E2EE1:opaque"}],
-        });
+        store.dispatch(history("c7", [{id: "1", from: "peer", text: "old clear text"}, {id: "2", from: "peer", text: "E2EE1:opaque"}]));
         expect(isSecret(store, "c7")).toBe(true);
     });
 
@@ -99,11 +100,7 @@ describe("secret mode follows the encrypted messages", () => {
         const store = makeStore();
         store.dispatch(incoming("E2EE1:opaque"));
         store.dispatch(unmarkSecret("c1"));
-        store.dispatch({
-            type: "test/historyFulfilled",
-            meta: {arg: {originalArgs: {myId: "me", chatId: "c1"}}},
-            payload: [{id: "2", from: "peer", text: "E2EE1:opaque"}],
-        });
+        store.dispatch(history("c1", [{id: "2", from: "peer", text: "E2EE1:opaque"}]));
         expect(isSecret(store, "c1")).toBe(false);
     });
 
@@ -119,11 +116,7 @@ describe("secret mode follows the encrypted messages", () => {
 
     it("a history without encrypted messages leaves the chat ordinary", () => {
         const store = makeStore();
-        store.dispatch({
-            type: "test/historyFulfilled",
-            meta: {arg: {originalArgs: {myId: "me", chatId: "c8"}}},
-            payload: [{id: "1", from: "peer", text: "clear"}],
-        });
+        store.dispatch(history("c8", [{id: "1", from: "peer", text: "clear"}]));
         expect(isSecret(store, "c8")).toBe(false);
     });
 });
@@ -131,32 +124,37 @@ describe("secret mode follows the encrypted messages", () => {
 // Spec 001, story 5, finding 46: the text is shown, but if it could not be stored the row says so.
 describe("a decrypted message that could not be stored", () => {
     const flush = () => new Promise((r) => setTimeout(r, 0));
-    const lastRow = async () => {
-        const {chatApi} = await import("@/features/chat/rest/chatApi.ts");
-        const row: {id: string; text: string; unsaved?: boolean} = {id: "01KY29D4BHHB40EW2FKMHR6V7M", text: "?"};
-        for (const c of vi.mocked(chatApi.util.updateQueryData).mock.calls) (c[2] as unknown as (d: unknown[]) => void)([row]);
-        return row;
+    // The chat is open with the one row in it; the message from the socket is that row.
+    const openChat = () => {
+        const store = makeStore();
+        store.dispatch(diskTaken({chatId: "c1", rows: [{id: "01KY29D4BHHB40EW2FKMHR6V7M", text: "?"} as ChatMessage]}));
+        return store;
+    };
+    const lastRow = (store: ReturnType<typeof makeStore>) => {
+        const rows = selectRows(store.getState(), "c1") ?? [];
+        expect(rows).toHaveLength(1);
+        return rows[0];
     };
 
-    beforeEach(async () => {
-        const {chatApi} = await import("@/features/chat/rest/chatApi.ts");
-        vi.mocked(chatApi.util.updateQueryData).mockClear();
+    beforeEach(() => {
         h.loadPlaintext.mockResolvedValue(null);   // not seen before → the ratchet runs
     });
 
     it("is marked unsaved when the save fails", async () => {
         h.savePlaintext.mockResolvedValue(false);
-        makeStore().dispatch(incoming("E2EE1:opaque"));
+        const store = openChat();
+        store.dispatch(incoming("E2EE1:opaque"));
         await flush(); await flush();
-        const row = await lastRow();
+        const row = lastRow(store);
         expect(row.text).toBe("hello");
         expect(row.unsaved).toBe(true);
     });
 
     it("is not marked when the save succeeds", async () => {
         h.savePlaintext.mockResolvedValue(true);
-        makeStore().dispatch(incoming("E2EE1:opaque"));
+        const store = openChat();
+        store.dispatch(incoming("E2EE1:opaque"));
         await flush(); await flush();
-        expect((await lastRow()).unsaved).toBeUndefined();
+        expect(lastRow(store).unsaved).toBeUndefined();
     });
 });

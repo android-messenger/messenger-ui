@@ -14,10 +14,8 @@ const h = vi.hoisted(() => ({
 
 vi.mock("@/features/chat/rest/chatApi.ts", () => ({
     chatApi: {
-        util: {updateQueryData: vi.fn((endpoint, args, recipe) => ({type: "test/updateQueryData", endpoint, args, recipe}))},
         endpoints: {
             getChats: {select: vi.fn(() => () => ({data: [{conversationId: "c1"}]}))},
-            getChatHistory: {matchFulfilled: (a: {type?: string}) => a?.type === "test/historyFulfilled"},
         },
     },
 }));
@@ -39,6 +37,8 @@ vi.mock("@/features/e2ee", () => ({
 // wire.ts (the marker, failure.ts) is the REAL module (pure) — the classify/recoverable logic under test.
 
 import {chatMiddleware} from "../chatMiddleware";
+import historyReducer, {answerTaken, type ChatHistoryState} from "@/features/chat/model/slices/chatHistorySlice.ts";
+import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema.ts";
 
 const SERVER_ID = "01KY29D4BHHB40EW2FKMHR6V7M";
 const CLIENT_ID = "nano_abc123";
@@ -55,13 +55,18 @@ function harness(selectedChatId: string | null) {
     return {dispatched, run};
 }
 const flush = () => new Promise((r) => setTimeout(r, 0));
-// Apply the LAST getChatHistory recipe to a one-row draft → the text the path settled on.
-const settledText = (d: Dispatched[]) => {
-    const recipes = d.filter((a) => a.type === "test/updateQueryData" && a.endpoint === "getChatHistory");
-    const draft = [{id: SERVER_ID, text: "?"}];
-    for (const r of recipes) (r.recipe as (x: unknown[]) => void)(draft);
-    return draft[0].text;
+// The rows of chat c1 after the REAL reducer of the slice took everything the middleware dispatched,
+// starting from a chat that already holds `before`.
+const rowsAfter = (d: Dispatched[], before: Array<Partial<ChatMessage>>) => {
+    const chatId = "c1";
+    const rows = before as ChatMessage[];
+    const state: ChatHistoryState = {
+        byChat: {[chatId]: {rows, held: [], reading: 0, arrived: [], readEpoch: null, error: false, fromDisk: false, noOlder: false}},
+    };
+    return d.reduce((s, a) => historyReducer(s, a), state).byChat[chatId].rows ?? [];
 };
+// Start from a chat that holds the one row → the text the path settled on.
+const settledText = (d: Dispatched[]) => rowsAfter(d, [{id: SERVER_ID, text: "?"}])[0].text;
 
 const secretOut = (over: Record<string, unknown> = {}) => ({
     type: "CHAT_OUT", messageId: SERVER_ID, correlationId: CLIENT_ID, conversationId: "c1",
@@ -93,14 +98,11 @@ describe("chatMiddleware — secret live path", () => {
         const {dispatched, run} = harness("c1");
         run(secretOut());
         await flush();
-        // Apply every getChatHistory recipe to an EMPTY loaded history: insert the row, then patch its text.
-        const draft: Array<{id: string; text: string; secret?: boolean}> = [];
-        for (const a of dispatched) {
-            if (a.type === "test/updateQueryData" && a.endpoint === "getChatHistory") (a.recipe as (x: unknown[]) => void)(draft);
-        }
-        expect(draft).toHaveLength(1);
-        expect(draft[0].text).toBe("hola");
-        expect(draft[0].secret).toBe(true);
+        // Start from an EMPTY loaded history: the row is put in, then its text is patched.
+        const rows = rowsAfter(dispatched, []);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].text).toBe("hola");
+        expect(rows[0].secret).toBe(true);
     });
 
     it("durable dedup: a stored copy is reused and the ratchet is never touched", async () => {
@@ -174,15 +176,17 @@ describe("chatMiddleware — a browser has no keys", () => {
 
 describe("chatMiddleware — secret history path", () => {
     const OWN_ID = "01KY29D4BHHB40EW2FKMHR6V7N";
-    function loadHistory(rows: Array<{id: string; from: string; text: string}>) {
+    // The answer of the history goes through the middleware the way the store passes it: as answerTaken.
+    // `held` — what the chat holds after the answer was merged in (the middleware runs after the reducer).
+    function loadHistory(rows: Array<{id: string; from: string; text: string}>, held: Array<Partial<ChatMessage>> = []) {
         const dispatched: Dispatched[] = [];
         const store = {
             dispatch: vi.fn((a: Dispatched) => { dispatched.push(a); return a; }),
-            getState: vi.fn(() => ({user: {id: "me"}, chatUi: {selectedChatId: "c1"}})),
+            getState: vi.fn(() => ({user: {id: "me"}, chatUi: {selectedChatId: "c1"}, chatHistory: {byChat: {c1: {rows: held}}}})),
         };
-        chatMiddleware(store as never)(((a: unknown) => a) as never)({
-            type: "test/historyFulfilled", payload: rows, meta: {arg: {originalArgs: {myId: "me", chatId: "c1"}}},
-        });
+        chatMiddleware(store as never)(((a: unknown) => a) as never)(
+            answerTaken({chatId: "c1", answer: rows as ChatMessage[], whole: true, epoch: null}),
+        );
         return dispatched;
     }
 
@@ -198,11 +202,21 @@ describe("chatMiddleware — secret history path", () => {
         await flush(); await flush();
         Date.now = realNow;
 
-        const draft: Array<{id: string; text: string; secret?: boolean}> = rows.map((r) => ({...r}));
-        for (const a of dispatched) {
-            if (a.type === "test/updateQueryData" && a.endpoint === "getChatHistory") (a.recipe as (x: unknown[]) => void)(draft);
-        }
+        const draft = rowsAfter(dispatched, rows.map((r) => ({...r})));
+        expect(draft).toHaveLength(2);
         expect(draft.every((r) => r.secret === true)).toBe(true);
         expect(draft.every((r) => !r.text.startsWith("E2EE1:"))).toBe(true);
+    });
+
+    it("a text held only in memory (it could not be stored) is left alone: no second run of the ratchet, no placeholder", async () => {
+        h.decryptReceived.mockClear();
+        h.decryptReceived.mockRejectedValue(new Error("duplicate message"));     // what the ratchet says the second time
+        const dispatched = loadHistory(
+            [{id: SERVER_ID, from: "peer", text: "E2EE1:opaque"}],
+            [{id: SERVER_ID, from: "peer", text: "read once", secret: true, unsaved: true}],
+        );
+        await flush(); await flush();
+        expect(h.decryptReceived).not.toHaveBeenCalled();
+        expect(dispatched).toEqual([]);
     });
 });

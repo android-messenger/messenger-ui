@@ -5,7 +5,7 @@ import type {AppDispatch, RootState} from "@/store/store";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {logger} from "@/shared/logger/logger.ts";
-import {isStale} from "@/features/chat/model/historySync.ts";
+import {isStale, selectChatHistory} from "@/features/chat/model/slices/chatHistorySlice.ts";
 
 /** The connection of the socket the "unread" marks were last asked under (spec 002 §3.2). */
 let unreadAskedUnder: number | null = null;
@@ -68,7 +68,9 @@ export function useReconnectCatchup(params: {
     // socket has just connected again. A chat read under the current connection is left alone.
     useEffect(() => {
         if (!selectedChatId || wsStatus !== "connected") return;
-        if (!isStale(selectedChatId, store.getState().ws)) return;
+        if (!isStale(store.getState(), selectedChatId)) return;
+        // A read on its way reads the chat once more by itself if the socket changed under it (readHistory).
+        if ((selectChatHistory(store.getState(), selectedChatId)?.reading ?? 0) > 0) return;
         logger.info("sync: chat is stale, reading its history", {chatId: selectedChatId, epoch: wsEpoch});
         Promise.resolve(reloadChatHistory()).catch(() => {});
     }, [selectedChatId, wsStatus, wsEpoch, reloadChatHistory, store]);

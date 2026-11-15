@@ -19,7 +19,7 @@ describe("sources", () => {
     });
 
     it("the comparison keys still separate their parts, now with the escape sequence", () => {
-        expect(count("/src/features/chat/rest/chatApi.ts", ESC)).toBe(2);
+        expect(count("/src/features/chat/thunk/readHistory.ts", ESC)).toBe(2);
         expect(count("/src/features/chat/model/services/chatMessages.service.ts", ESC)).toBe(1);
     });
 });

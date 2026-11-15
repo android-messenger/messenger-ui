@@ -78,8 +78,8 @@ async function oneRun(b: Bench, seed: number): Promise<string[]> {
 describe("random order of socket frames, history answers and drops (SC-005)", () => {
     afterEach(stop);
 
-    // Fails today: findings 1 and 2 of the audit (tests A1, A2). The mark is taken off by T317.
-    it.fails(`in ${RUNS} runs no acknowledged message is missing from the chat`, {timeout: 120_000}, async () => {
+    // Failed until story 2а (findings 1 and 2 of the audit, tests A1 and A2): 499 runs of 1000 lost a message.
+    it(`in ${RUNS} runs no acknowledged message is missing from the chat`, {timeout: 120_000}, async () => {
         const b = await bench();
         await b.signIn(MY);
         const lost: string[] = [];

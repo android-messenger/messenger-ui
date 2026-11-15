@@ -14,7 +14,7 @@ vi.mock("@/features/chat/thunk/sendOutboxThunk.ts", () => ({
 import {useReconnectCatchup, resetUnreadAsked} from "../useReconnectCatchup";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
-import {forgetHistorySync, markStale, noteHistoryRead} from "@/features/chat/model/historySync.ts";
+import chatHistoryReducer, {answerTaken, historyStale, isStale} from "@/features/chat/model/slices/chatHistorySlice.ts";
 
 const refetch = vi.mocked(chatMessagesService.refetchChatsPreservingSelected);
 const flush = vi.mocked(flushOutbox);
@@ -24,21 +24,24 @@ function setVisibility(v: "visible" | "hidden") {
     Object.defineProperty(document, "visibilityState", {configurable: true, get: () => v});
 }
 
+type Ws = {status: string; epoch: number};
+
 function makeStore(initialStatus: string) {
     return configureStore({
         reducer: {
             // epoch: the number of the socket's connection, +1 on every connect (as in websocketSlice)
-            ws: (state = {status: initialStatus, epoch: initialStatus === "connected" ? 1 : 0}, action: {type: string; status?: string}) =>
+            ws: (state: Ws = {status: initialStatus, epoch: initialStatus === "connected" ? 1 : 0}, action: {type: string; status?: string}): Ws =>
                 action.type === "test/ws"
                     ? {status: action.status!, epoch: state.epoch + (action.status === "connected" ? 1 : 0)}
                     : state,
+            chatHistory: chatHistoryReducer,
         },
     });
 }
 
 /** The chat's history was read from the server under the current connection: it is complete. */
 function complete(store: ReturnType<typeof makeStore>, chatId: string) {
-    noteHistoryRead(chatId, store.getState().ws.epoch, store.getState().ws);
+    store.dispatch(answerTaken({chatId, answer: [], whole: true, epoch: store.getState().ws.epoch}));
 }
 
 function wrap(store: ReturnType<typeof makeStore>) {
@@ -49,8 +52,7 @@ beforeEach(() => {
     refetch.mockClear();
     flush.mockClear();
     probe.mockClear();
-    resetUnreadAsked();
-    forgetHistorySync();
+    resetUnreadAsked();       // the history itself starts empty: every test makes its own store
     setVisibility("visible");
 });
 afterEach(() => setVisibility("visible"));
@@ -159,11 +161,13 @@ describe("useReconnectCatchup", () => {
         expect(reload).toHaveBeenCalledTimes(1);
     });
 
-    it("markStale is how a push or a tap asks for one chat to be read again", () => {
+    it("historyStale is how a push or a tap asks for one chat to be read again", () => {
         const store = makeStore("connected");
         complete(store, "c1");
         expect(store.getState().ws.epoch).toBe(1);
-        markStale("c1");
+        expect(isStale(store.getState(), "c1")).toBe(false);
+        store.dispatch(historyStale({chatId: "c1"}));
+        expect(isStale(store.getState(), "c1")).toBe(true);
         const reload = vi.fn(() => Promise.resolve());
         renderHook(() => useReconnectCatchup({selectedChatId: "c1", reloadChatHistory: reload}), {wrapper: wrap(store)});
         expect(reload).toHaveBeenCalledTimes(1);

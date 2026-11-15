@@ -1,12 +1,12 @@
 import {chatsToProbe, inBatches, isUnread, UNREAD_PROBE_PARALLEL} from "@/features/chat/model/unreadProbe.ts";
-import {markStale} from "@/features/chat/model/historySync.ts";
+import {chatCleared, echoPut, historyStale, rowFixed} from "@/features/chat/model/slices/chatHistorySlice.ts";
+import {readHistory} from "@/features/chat/thunk/readHistory.ts";
 import {markChatUnread} from "@/features/chat/model/slices/chatUiSlice.ts";
 import {type AppDispatch, type RootState} from "@/store/store";
 import {chatApi} from "@/features/chat/rest/chatApi";
 import {logger} from "@/shared/logger/logger.ts";
 import {enqueueMessage} from "@/features/chat/model/slices/outboxSlice.ts";
 import {toOutboxMessage} from "@/features/chat/model/mapper.ts";
-import {upsertMessage} from "@/features/chat/model/historyCache.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {preserveSelectedConversation} from "@/features/chat/model/preserveSelectedConversation.ts";
 import {secretCrypto, savePlaintext, deletePlaintextForChat} from "@/features/e2ee";
@@ -65,7 +65,7 @@ export const chatMessagesService = {
                 {chatId: chat.conversationId}, {forceRefetch: true, subscribe: false})).unwrap();
             if (!isUnread(last ?? undefined, myId, chat.myReadId)) return;
             if (!getState().chatUi?.unreadByChat?.[chat.conversationId]) marked++;
-            markStale(chat.conversationId);
+            dispatch(historyStale({chatId: chat.conversationId}));
             dispatch(markChatUnread(chat.conversationId));
         });
         logger.info("sync: unread asked", {chats: asked.length, marked});
@@ -79,24 +79,17 @@ export const chatMessagesService = {
             await deleteHistory({myId, chatId}).unwrap();
             void deletePlaintextForChat(chatId);   // wipe locally-stored decrypted secret messages
             void deleteChatCache(chatId);           // wipe cached attachment files + history rows
-            dispatch(
-                chatApi.util.updateQueryData(
-                    "getChatHistory",
-                    {myId, chatId},
-                    () => []
-                )
-            );
+            dispatch(chatCleared({chatId}));
         } catch (err) {
             logger.error("Failed to clear chat", err as Error);
         }
     },
 
-    reloadChatHistory(dispatch: AppDispatch, myId: string, chatId: string | null) {
+    /** Reads the chat's history from the server and merges it into the chat (thunk/readHistory.ts). */
+    reloadChatHistory(dispatch: AppDispatch, chatId: string | null) {
         if (!chatId) return;
         logger.debug("reloading chat data", chatId);
-        return dispatch(
-            chatApi.endpoints.getChatHistory.initiate({myId, chatId}, {forceRefetch: true})
-        );
+        return dispatch(readHistory(chatId));
     },
 
 
@@ -171,18 +164,14 @@ export const chatMessagesService = {
             void savePlaintext(outboxMsg.id, conversationId, text, recipientId).then((saved) => {
                 if (saved) return;
                 // Our own text is readable after a reload only from this store: tell the user it is not there.
-                dispatch(chatApi.util.updateQueryData("getChatHistory", {myId, chatId: conversationId}, (draft) => {
-                    const row = draft?.find((m) => m.id === outboxMsg.id || m.clientId === outboxMsg.id);
-                    if (row) row.unsaved = true;
-                }));
+                dispatch(rowFixed({chatId: conversationId, clientId: outboxMsg.id, fix: {unsaved: true}}));
             });
         }
         dispatch(enqueueMessage(outboxMsg));
 
         // Optimistic echo: the backend does NOT send CHAT_OUT back to the sender (only a
         // CHAT_ACK), so show our own message immediately. The client messageId is used as
-        // the id; on the next history read-through RTK Query replaces the list with the
-        // server's authoritative rows, so this transient copy can't duplicate.
+        // the id; the server's row of the same message replaces it (one message — one row).
         const optimistic = {
             id: outboxMsg.id,
             clientId: outboxMsg.id,   // dedup key (matches correlationId on echoes)
@@ -195,19 +184,7 @@ export const chatMessagesService = {
             secret: secret && !!recipientId,   // 🔒 marker on my own secret messages
             ...(meta ? {meta} : {}),
         };
-        dispatch(
-            chatApi.util.updateQueryData(
-                "getChatHistory",
-                {myId, chatId: conversationId},
-                (draft) => {
-                    // Seed the array when history hasn't loaded yet (e.g. the chat was opened while
-                    // OFFLINE → getChatHistory errored → data is undefined). Without this the echo
-                    // was silently dropped and the 🕐 message only appeared after reconnect.
-                    if (!draft) return [optimistic];
-                    upsertMessage(draft, optimistic); // canonical id||clientId dedup (model/historyCache)
-                }
-            )
-        );
+        dispatch(echoPut({chatId: conversationId, row: optimistic}));
 
         dispatch(flushOutbox());
     },

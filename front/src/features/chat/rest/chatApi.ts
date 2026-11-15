@@ -1,13 +1,10 @@
-import {logger} from "@/shared/logger/logger.ts";
-import {liveEpoch, noteHistoryRead} from "@/features/chat/model/historySync.ts";
 import {createApi, fetchBaseQuery} from "@reduxjs/toolkit/query/react";
 import {type ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema.ts";
-import type {OutboxMessage} from "@/features/chat/model/types.ts";
 import {MESSENGER_API} from "@/shared/config/api.ts";
 import {HISTORY_PAGE_SIZE} from "@/shared/config/chat.ts";
-import {loadHistoryFromDB, saveHistoryToDB} from "@/features/chat/db/db.ts";
-import {setPeerLastReadId} from "@/features/chat/model/slices/chatUiSlice.ts";
-import {toMessages, dedupMessages} from "@/features/chat/model/reconcileHistory.ts";
+import {saveHistoryToDB} from "@/features/chat/db/db.ts";
+import {toMessages} from "@/features/chat/model/reconcileHistory.ts";
+import {rowRemoved, rowRestored, selectRows, type ChatHistoryState} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {toChatSummary, type RawConversation, type ChatSummary} from "@/entities/conversation";
 
 /** Raw backend Conversation (GET /api/chats) — internal to this api's transformResponse. */
@@ -53,119 +50,14 @@ export const chatApi = createApi({
             keepUnusedDataFor: 0,
         }),
 
-        // The newest page of the chat's history as the server gave it — for the readHistory thunk
-        // (spec 003, story 2), which merges it into the chatHistory slice. Never cached.
-        getHistoryPage: builder.query<unknown, { chatId: string }>({
+        // The newest page of the chat's history as the server gave it (backend default = latest `limit`,
+        // ASC) — for the readHistory thunk (spec 003, story 2), which merges it into the chatHistory
+        // slice. Older pages are pulled by the loadOlderHistory thunk (`?before=<oldest>`).
+        // A GET declared as a "mutation": the answer is handed to the caller and kept nowhere — the
+        // messages live in the slice. As a query with no subscriber its cache entry was dropped while
+        // the next request was on its way, and that request came back with no data at all.
+        getHistoryPage: builder.mutation<unknown, { chatId: string }>({
             query: ({chatId}) => `/chats/${chatId}/messages?limit=${HISTORY_PAGE_SIZE}`,
-            keepUnusedDataFor: 0,
-        }),
-
-        // --------------------
-        // Conversation history (cursor-paginated). chatId === conversationId.
-        // --------------------
-        // Loads the NEWEST page (backend default = latest `limit`, ASC). Older pages are pulled on
-        // demand by the loadOlderHistory thunk (`?before=<oldest>`), which prepends into this cache;
-        // reconnect catch-up appends newer via `?since=`. Rendering is windowed downstream.
-        getChatHistory: builder.query<
-            ChatMessage[],
-            { myId: string; chatId: string }
-        >({
-            async queryFn({myId, chatId}, api, _extra, baseQuery) {
-                // Spec 002 §3.1: the connection of the socket this read starts under (null — not connected).
-                const wsOf = () => (api.getState() as {ws?: {status?: string; epoch?: number}}).ws;
-                const startedUnder = liveEpoch(wsOf());
-                const res = await baseQuery(`/chats/${chatId}/messages?limit=${HISTORY_PAGE_SIZE}`);
-                // A 404 = a conversation with no message backing yet (e.g. a group whose history endpoint
-                // isn't wired). Treat it as EMPTY, not an error — an errored query leaves RTK's `data`
-                // holding the PREVIOUSLY opened chat's rows, which then render in the new (group) window
-                // (the "1:1 messages leaked into the group" bug). Fall THROUGH (raw=undefined → [] rows)
-                // so the outbox re-graft below still runs and a just-sent pending group message survives.
-                if (res.error && (res.error as {status?: number}).status !== 404) {
-                    logger.info("sync: history read failed", {chatId, status: (res.error as {status?: unknown}).status});
-                    return {error: res.error};
-                }
-                const raw = res.error ? undefined : res.data;
-                const messages = dedupMessages(toMessages(raw));
-                const proved = noteHistoryRead(chatId, startedUnder, wsOf());
-                logger.info("sync: history read", {chatId, rows: messages.length, complete: proved});
-                // Read while the socket was down or changing, and it is up now: the answer may miss what came
-                // in between. Read once more under the live connection (after this request has settled).
-                if (!proved && liveEpoch(wsOf()) !== null) {
-                    setTimeout(() => { void api.dispatch(chatApi.endpoints.getChatHistory.initiate({myId, chatId}, {forceRefetch: true, subscribe: false})); }, 0);
-                }
-
-                // ✓✓ source of truth (backend contract): the response is an envelope
-                // { messages, peerLastReadId } where peerLastReadId is the peer's read watermark
-                // (a server ULID, or null/legacy). Feed it to chatUi so my messages with
-                // serverMessageId <= peerLastReadId render ✓✓. ULID-guarded + monotonic in the reducer,
-                // so a null or legacy non-ULID watermark is simply ignored (no false ✓✓).
-                const peerLastReadId = (raw as { peerLastReadId?: string | null } | undefined)?.peerLastReadId;
-                if (peerLastReadId) api.dispatch(setPeerLastReadId({chatId, lastReadId: peerLastReadId}));
-
-                // Re-graft still-queued outbox messages for this chat. A forceRefetch REPLACES the
-                // cache array, wiping the optimistic echoes of not-yet-acked messages; the CHAT_ACK
-                // handler only updates an existing row (never re-inserts), so without this a pending
-                // message would vanish from the sender's transcript on reconnect / after sending an
-                // attachment (both call reloadChatHistory). Everything still in the outbox is by
-                // definition un-acked (markSent removes it on ACK), so it isn't in the server rows yet
-                // → append it, skipping any id already present.
-                const outbox = (api.getState() as { outbox?: { messages?: OutboxMessage[] } }).outbox?.messages ?? [];
-                const present = new Set(messages.map((m) => m.id));
-                // Server rows carry no client id, so an un-acked outbox echo can't be matched to its
-                // OWN server row by id — if the message was stored server-side but its ACK was lost, a
-                // refetch would show it twice (server ULID row + client echo). Dedup by content: if a
-                // server row from me already has this text+kind, the message was delivered — skip the echo.
-                const mineServer = new Set(
-                    messages.filter((m) => m.from === myId).map((m) => `${m.kind ?? ""}\0${m.text}`)
-                );
-                for (const o of outbox) {
-                    const p = o.payload;
-                    if (p?.conversationId !== chatId || present.has(o.id)) continue;
-                    if (mineServer.has(`${p.payload?.kind ?? ""}\0${p.payload?.body ?? ""}`)) continue;
-                    messages.push({
-                        id: o.id,
-                        clientId: o.id,
-                        chatId,
-                        from: myId,
-                        to: p.recipientId ?? "",
-                        text: p.payload?.body ?? "",
-                        createdAt: new Date(p.senderTimestamp ?? Date.now()),
-                        status: o.status,
-                        kind: p.payload?.kind,
-                        meta: p.meta,
-                    });
-                }
-                return {data: messages};
-            },
-            providesTags: (_r, _e, arg) => [
-                {type: "Chat", id: arg.chatId},
-            ],
-            // Offline/instant-open cache in IndexedDB: seed from the local cache immediately (so the
-            // chat opens without waiting for the network), then persist the fresh result and, on
-            // unsubscribe, the final in-memory state (incl. messages that arrived while open).
-            // Only what toDiskRows lets through reaches the disk: secret (E2EE) rows are dropped inside
-            // saveHistoryToDB / loadHistoryFromDB, so the in-memory array can be passed as is.
-            async onCacheEntryAdded(arg, {updateCachedData, cacheDataLoaded, cacheEntryRemoved, getCacheEntry}) {
-                try {
-                    const cached = await loadHistoryFromDB(arg.chatId);
-                    if (cached && cached.length) {
-                        updateCachedData((draft) => {
-                            // Seed only while the network hasn't populated the entry yet.
-                            if (!Array.isArray(draft) || draft.length === 0) return cached;
-                        });
-                    }
-                } catch { /* cache read is best-effort */ }
-                try {
-                    await cacheDataLoaded;
-                    const data = getCacheEntry().data;
-                    if (data) await saveHistoryToDB(arg.chatId, data);
-                } catch { /* subscription aborted before first load */ }
-                try {
-                    await cacheEntryRemoved;
-                    const data = getCacheEntry().data;
-                    if (data) await saveHistoryToDB(arg.chatId, data);
-                } catch { /* ignore */ }
-            },
         }),
 
         // --------------------
@@ -179,14 +71,10 @@ export const chatApi = createApi({
                 url: `/chats/${chatId}`,
                 method: "DELETE",
             }),
-            // Invalidate BOTH the history (Chat/id) AND the chat list (Chats): the backend excludes
-            // soft-deleted conversations from GET /chats, so refetching the list drops the deleted
-            // chat from the UI. Without the "Chats" tag the list query never refetches and the
-            // deleted chat lingers in the sidebar.
-            invalidatesTags: (_r, _e, arg) => [
-                {type: "Chat", id: arg.chatId},
-                "Chats",
-            ],
+            // Invalidate the chat list (Chats): the backend excludes soft-deleted conversations from
+            // GET /chats, so refetching the list drops the deleted chat from the UI. The chat's rows are
+            // emptied by the caller (chatMessagesService.clearChatHistory).
+            invalidatesTags: ["Chats"],
         }),
 
         // --------------------
@@ -271,30 +159,27 @@ export const chatApi = createApi({
                 if (clientMessageId) q.set("clientMessageId", clientMessageId);
                 return { url: `/chats/${chatId}/messages?${q.toString()}`, method: "DELETE" };
             },
-            // Remove the one message from the history cache in place — do NOT invalidate the "Chat"
-            // tag. An invalidation forces getChatHistory to refetch the ENTIRE conversation just to
-            // drop a single row (the exact refetch we were trying to avoid). Match on the server ULID
-            // (backendId → m.id) OR the original client id (clientMessageId → m.clientId/m.id), so a
-            // not-yet-reconciled message deletes locally too. Undo the patch if the request fails.
+            // Take the one row out of the chat at once — the history is not read again for it. Match on
+            // the server ULID (backendId → m.id) OR the original client id (clientMessageId →
+            // m.clientId/m.id), so a not-yet-reconciled message deletes locally too. The row goes back if
+            // the request fails.
             async onQueryStarted({ chatId, backendId, clientMessageId }, { dispatch, getState, queryFulfilled }) {
-                const myId = (getState() as { user?: { id?: string } })?.user?.id;
-                if (!myId) return;
-                const patch = dispatch(chatApi.util.updateQueryData("getChatHistory", { myId, chatId }, (draft) => {
-                    if (!Array.isArray(draft)) return;
-                    const i = draft.findIndex((m) =>
-                        (backendId && m.id === backendId) ||
-                        (clientMessageId && (m.clientId === clientMessageId || m.id === clientMessageId)));
-                    if (i >= 0) draft.splice(i, 1);
-                }));
+                const rows = () => selectRows(getState() as unknown as {chatHistory: ChatHistoryState}, chatId);
+                const index = rows()?.findIndex((m) =>
+                    (!!backendId && m.id === backendId) ||
+                    (!!clientMessageId && (m.clientId === clientMessageId || m.id === clientMessageId))) ?? -1;
+                const row = index >= 0 ? rows()![index] : undefined;
+                if (row) dispatch(rowRemoved({chatId, id: row.id}));
                 try {
                     await queryFulfilled;
-                    // Persist the post-delete list now. The IndexedDB seed is otherwise only rewritten
-                    // on cacheEntryRemoved (unsubscribe); if the tab is hard-closed before then, the
-                    // stale pre-delete array would re-seed and the deleted message would reappear offline.
-                    // The in-memory array holds decrypted secret rows; saveHistoryToDB filters them out.
-                    const data = chatApi.endpoints.getChatHistory.select({ myId, chatId })(getState() as never)?.data;
-                    if (data) saveHistoryToDB(chatId, data).catch(() => { /* best-effort */ });
-                } catch { patch.undo(); }
+                    // The device's copy now, not when the chat leaves the screen: if the app is killed
+                    // before that, the deleted message would be back offline. The rows hold decrypted
+                    // secret text; saveHistoryToDB leaves it out.
+                    const now = rows();
+                    if (now) saveHistoryToDB(chatId, now).catch(() => { /* best-effort */ });
+                } catch {
+                    if (row) dispatch(rowRestored({chatId, row, index}));
+                }
             },
         }),
 
@@ -348,8 +233,6 @@ export const chatApi = createApi({
 // --------------------
 export const {
     useGetChatsQuery,
-    useLazyGetChatHistoryQuery,
-    useGetChatHistoryQuery,
     useDeleteChatHistoryMutation,
     useMarkReadMutation,
     useCreateChatMutation,

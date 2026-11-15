@@ -5,7 +5,7 @@ import {chatApi} from "@/features/chat/rest/chatApi.ts";
 import {groupApi} from "@/features/groups/rest/groupApi.ts";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {wireToChatMessage} from "@/features/chat/model/mapper.ts";
-import {upsertMessage} from "@/features/chat/model/historyCache.ts";
+import {ackTaken, answerTaken, rowFixed, selectRows, socketRow} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {buildChatAck, buildReadIn, type WireMessage} from "@/features/chat/model/schema/wireMessage.schema.ts";
 import {markChatUnread, setPeerLastReadId, setTyping} from "@/features/chat/model/slices/chatUiSlice.ts";
 import {markSent} from "@/features/chat/model/slices/outboxSlice.ts";
@@ -34,12 +34,9 @@ const rekeyHintThrottle = makeThrottle(REKEY_COALESCE_MS);
  * exactly once, synchronously, before the next one can overwrite anything.
  */
 /** A secret text that could not be stored is gone after a reload: mark its row so the user knows. */
-async function flagIfNotSaved(dispatch: AppDispatch, myId: string, chatId: string, id: string, saved: Promise<boolean>): Promise<void> {
+async function flagIfNotSaved(dispatch: AppDispatch, chatId: string, id: string, saved: Promise<boolean>): Promise<void> {
     if (await saved) return;
-    dispatch(chatApi.util.updateQueryData("getChatHistory", {myId, chatId}, (draft) => {
-        const row = draft?.find((r) => r.id === id);
-        if (row) row.unsaved = true;
-    }));
+    dispatch(rowFixed({chatId, id, fix: {unsaved: true}}));
 }
 
 /**
@@ -56,18 +53,21 @@ function ensureSecretChat(store: {getState: () => unknown; dispatch: (a: never) 
 export const chatMiddleware: Middleware = (store) => (next) => (action) => {
     const result = next(action);
 
-    // History (re)load: rows carry the raw E2EE envelope. For each secret message, restore the text —
+    // An answer of the history has been merged into the chat: its rows carry the raw E2EE envelope. For each secret message, restore the text —
     //   1. from the at-rest plaintext store (decrypted once on receipt / stashed at send), else
     //   2. (Step A) for an INCOMING message never decrypted live — the offline case, delivered ONLY via
     //      history — run the ratchet NOW, in history order (skipped-keys align small gaps), and stash it.
     // Own sent messages can't be ratchet-decrypted (the envelope is encrypted to the PEER), so those rely
     // on the store only. A hard failure (permanent gap / lost ciphertext) → "🔒 lost" (Step B will attempt
     // client-to-client recovery before giving up).
-    if (chatApi.endpoints?.getChatHistory?.matchFulfilled?.(action)) {
-        const {myId, chatId} = action.meta.arg.originalArgs as {myId: string; chatId: string};
-        const rows = action.payload as Array<{id: string; clientId?: string; from?: string; text: string}>;
-        const secret = rows.filter((m) => isSecretEnvelope(m.text));
-        if (secret.length) {
+    if (answerTaken.match(action)) {
+        const chatId = action.payload.chatId;
+        const myId = store.getState().user?.id as string;
+        // A row whose text this device holds only in memory (it could not be stored) keeps it through the
+        // merge: there is nothing to restore, and the ratchet would refuse the same envelope a second time.
+        const inMemoryOnly = new Set(selectRows(store.getState(), chatId)?.filter((r) => r.unsaved).map((r) => r.id));
+        const secret = action.payload.answer.filter((m) => isSecretEnvelope(m.text) && !inMemoryOnly.has(m.id));
+        if (secret.length && myId) {
             const d = store.dispatch as AppDispatch;
             // An encrypted message in the history means the chat is secret when this device remembers nothing
             // (localStorage cleared, a new install): mark it before the user can send anything in the clear.
@@ -86,7 +86,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                         // Never decrypted live → try the ratchet now (in-order over history).
                         try {
                             plain = await secretCrypto.decrypt(m.from, m.text);
-                            void flagIfNotSaved(d, myId, chatId, m.id, savePlaintext(m.id, chatId, plain));
+                            void flagIfNotSaved(d, chatId, m.id, savePlaintext(m.id, chatId, plain));
                         }
                         catch (e) {
                             // Permanent gap / lost ciphertext → hand off to client-to-client recovery (Step B),
@@ -108,10 +108,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                         : m.from === myId ? "unavailable"
                         : "lost";
                     const fallback = i18n.t(secretStateKey(state));
-                    d(chatApi.util.updateQueryData("getChatHistory", {myId, chatId}, (draft) => {
-                        const row = draft?.find((r) => r.id === m.id);
-                        if (row) { row.text = plain ?? fallback; row.secret = true; }
-                    }));
+                    d(rowFixed({chatId, id: m.id, fix: {text: plain ?? fallback, secret: true}}));
                 }
                 if (toRecover.length && peerId) d(reportUndecryptable({chatId, peerId, items: toRecover}) as never);
             })();
@@ -145,24 +142,14 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                 ensureSecretChat(store, chatId, true);
             }
 
-            // Append to the open conversation's history (idempotent). No-op if that query has
-            // no subscriber (chat not open) — the message loads over REST when it's opened.
-            dispatch(
-                chatApi.util.updateQueryData("getChatHistory", {myId, chatId}, (draft) => {
-                    if (!draft) return;
-                    // Canonical dedup (id || clientId) — see model/historyCache. Catches a lost-ACK
-                    // resend (stored under a fresh server id) and an already-shown optimistic echo.
-                    upsertMessage(draft, msg);
-                })
-            );
+            // Into the chat (spec 003, FR-012) — before the ACK below. The slice takes it if the chat's
+            // rows are in or are being read, on the screen or not; a chat never opened reads it from the
+            // server when it is opened. One message is one row (id || clientId, model/historyCache): a
+            // lost-ACK resend and an already-shown echo do not double.
+            dispatch(socketRow({chatId, row: msg}));
 
             if (secretBody) {
-                const patch = (text: string) => dispatch(
-                    chatApi.util.updateQueryData("getChatHistory", {myId, chatId}, (draft) => {
-                        const row = draft?.find((m) => m.id === msg.id);
-                        if (row) row.text = text;
-                    })
-                );
+                const patch = (text: string) => dispatch(rowFixed({chatId, id: msg.id, fix: {text}}));
                 const cid = msg.clientId;
                 void (async () => {
                     // Durable dedup FIRST: the Double Ratchet consumes each message key exactly once, so
@@ -178,7 +165,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                         const plain = await secretCrypto.decrypt(frame.senderId ?? msg.from, secretBody);
                         patch(plain);
                         // for reloaded history (by server id); a failed save is shown on the bubble
-                        void flagIfNotSaved(dispatch, myId, chatId, msg.id, savePlaintext(msg.id, chatId, plain));
+                        void flagIfNotSaved(dispatch, chatId, msg.id, savePlaintext(msg.id, chatId, plain));
                         if (cid) void savePlaintext(cid, chatId, plain);        // + by client id, so a resend dedups
                     } catch (e) {
                         // A stored copy always wins. Otherwise classify: a recoverable gap (past MAX_SKIP, no
@@ -279,15 +266,11 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
         case "CHAT_ACK": {
             if (!frame.correlationId) break;
             // Our queued message was accepted → drop it from the outbox. The message is ALREADY in
-            // the open history (inserted optimistically at enqueue, keyed by the client messageId).
-            // We deliberately do NOT re-read the history here: getChatHistory forward-pages the WHOLE
-            // conversation, so a refetch per ACK re-downloaded up to thousands of rows just to swap
-            // one temporary id for the server ULID — a real cost on every send. Instead we reconcile
-            // in place: stamp the echo with the server timestamp so its ✓/✓✓ read-receipt timing
-            // matches the server clock (the list is sorted by createdAt, and server stamps are
-            // monotonic, so ordering is preserved). The temporary client id is upgraded to the real
-            // ULID on the next natural read-through (the reconnect refetch in useChat). The ACK does
-            // NOT carry the stored message's id — its messageId is the ack frame's own id.
+            // the chat (put there at enqueue, keyed by the client messageId). The history is not read
+            // again for it: the row is reconciled in place — the server's id instead of the temporary
+            // client id (so delete and the read boundary work by id) and the server's time (so ✓/✓✓
+            // timing matches the server clock). The ACK does NOT carry the stored message's id in
+            // messageId — that is the ack frame's own id.
             dispatch(markSent(frame.correlationId));
             const chatId = frame.conversationId ?? selectedChatId;
             const at = frame.serverTimestamp;
@@ -295,20 +278,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             // NOT messageId (that is the ack frame's own id). Reconciling my optimistic echo to it
             // lets a just-sent message match the peer's read watermark and flip to ✓✓ without a reload.
             const serverId = frame.serverMessageId;
-            if (chatId && (typeof at === "number" || serverId)) {
-                dispatch(
-                    chatApi.util.updateQueryData("getChatHistory", {myId, chatId}, (draft) => {
-                        const m = draft?.find(
-                            (x) => x.clientId === frame.correlationId || x.id === frame.correlationId
-                        );
-                        if (!m) return;
-                        // Reconcile the optimistic echo: swap its temporary client id for the real
-                        // server ULID (so delete/read-boundary work by id), and stamp server time.
-                        if (serverId) m.id = serverId;
-                        if (typeof at === "number") m.createdAt = new Date(at);
-                    })
-                );
-            }
+            if (chatId) dispatch(ackTaken({chatId, clientId: frame.correlationId, serverId, at}));
             break;
         }
 

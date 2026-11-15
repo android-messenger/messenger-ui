@@ -1,12 +1,11 @@
 import {useCallback, useEffect, useMemo} from "react";
 import {useDispatch, useSelector} from "react-redux";
-import {skipToken} from "@reduxjs/toolkit/query/react";
-
 import {chatApi} from "@/features/chat/rest/chatApi";
 import {toChatMessageView} from "@/features/chat/model/mapper";
 import type {AppDispatch, RootState} from "@/store/store";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service";
-import {logger} from "@/shared/logger/logger";
+import {selectChatHistory} from "@/features/chat/model/slices/chatHistorySlice";
+import {openHistory, storeHistory} from "@/features/chat/thunk/readHistory";
 
 export function useChatMessages() {
     const myId = useSelector((state: RootState) => state.user.id);
@@ -20,25 +19,23 @@ export function useChatMessages() {
     );
 
     /* ======================
-       RTK Query: history — a group is fetched the SAME way as any conversation (its id IS a
-       conversation id). getChatHistory maps a 404 (a conversation with no message backing yet) to an
-       empty list, so it never leaves RTK's `data` holding the PREVIOUS chat's rows.
+       History — the chat's rows live in the chatHistory slice (spec 003, story 2). A group is read the
+       SAME way as any conversation (its id IS a conversation id); a 404 (a conversation with no message
+       backing yet) is an empty chat. The rows are taken per chat, so a slow switch never shows the
+       previous chat's messages under the new header: until this chat has rows, the loader is shown.
     ====================== */
-    // Use `currentData` (per-arg), NOT `data`: RTK Query's `data` RETAINS the previous chat's rows while
-    // the new chat's history is fetching — which rendered the OLD conversation's messages under the NEW
-    // header on a slow switch. `currentData` is undefined until THIS chat resolves, so we show a loader
-    // instead of stale rows. `isFetching` + no current data = "loading the selected chat".
-    const {currentData, isFetching, isError, error} = chatApi.useGetChatHistoryQuery(
-        selectedChatId ? {myId, chatId: selectedChatId} : skipToken
-    );
-    const loadingHistory = !!selectedChatId && isFetching && currentData === undefined;
+    const history = useSelector((state: RootState) => selectChatHistory(state, selectedChatId));
+    const rows = history?.rows;
+    // A failed read is shown, not swallowed: with no rows — a retryable error instead of an "empty" chat.
+    const isError = !!history?.error;
+    const loadingHistory = !!selectedChatId && rows === undefined && !isError;
 
-    // Surface, don't swallow: a server error loading history used to fall back to an empty list,
-    // indistinguishable from a genuinely empty chat and with no log. Log it and expose isError so
-    // the UI can show a retryable error state instead of a silent "empty" window.
+    // Read on open; the device's copy is written when the chat leaves the screen.
     useEffect(() => {
-        if (isError) logger.error("getChatHistory failed", {chatId: selectedChatId, error});
-    }, [isError, error, selectedChatId]);
+        if (!selectedChatId) return;
+        void dispatch(openHistory(selectedChatId));
+        return () => { void dispatch(storeHistory(selectedChatId)); };
+    }, [selectedChatId, dispatch]);
 
     const [deleteHistory] = chatApi.useDeleteChatHistoryMutation();
 
@@ -47,9 +44,9 @@ export function useChatMessages() {
     ====================== */
     const reloadChatHistory = useCallback(
         async () => {
-            chatMessagesService.reloadChatHistory(dispatch, myId, selectedChatId);
+            await chatMessagesService.reloadChatHistory(dispatch, selectedChatId);
         },
-        [dispatch, myId, selectedChatId]
+        [dispatch, selectedChatId]
     );
 
     /* ======================
@@ -70,10 +67,10 @@ export function useChatMessages() {
     ====================== */
     const messages = useMemo(
         () =>
-            [...(currentData ?? [])]
+            [...(rows ?? [])]
                 .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
                 .map((msg) => toChatMessageView(msg, myId)),
-        [currentData, myId]
+        [rows, myId]
     );
 
     return {

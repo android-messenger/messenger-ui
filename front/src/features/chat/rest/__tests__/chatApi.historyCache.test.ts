@@ -9,11 +9,15 @@ vi.mock("@/shared/config/api.ts", async (orig) => ({
 }));
 
 import {chatApi} from "../chatApi";
+import chatHistoryReducer, {rowFixed, selectRows} from "@/features/chat/model/slices/chatHistorySlice";
+import {readHistory} from "@/features/chat/thunk/readHistory";
 import {initDB, clearAllLocalData} from "@/features/chat/db/db";
 import {HISTORY_STORE_NAME} from "@/shared/config/idb";
 import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 
-// Finding № 1 (F1, work 1): the real chatApi against a real Redux store and IndexedDB. After a secret
+// Finding № 1 (F1, work 1): the real chatApi and the real chatHistory slice against a real Redux store
+// and IndexedDB. The chat's rows live in the slice; the readHistory thunk and deleteMessage write them
+// to the disk. After a secret
 // message is decrypted in memory, deleting ANY message used to write the whole in-memory array —
 // decrypted text included — into chatDB/history.
 
@@ -34,10 +38,16 @@ function makeStore() {
             user: (s: {id: string} = {id: MY}) => s,
             chatUi: (s: object = {}) => s,
             outbox: (s: {messages: unknown[]} = {messages: []}) => s,
+            chatHistory: chatHistoryReducer,
             [chatApi.reducerPath]: chatApi.reducer,
         },
         middleware: (gDM) => gDM({serializableCheck: false, immutableCheck: false}).concat(chatApi.middleware),
     });
+}
+
+/** Read the chat's history from the server into the slice (the thunk also saves it to the disk). */
+function read(store: ReturnType<typeof makeStore>): Promise<boolean> {
+    return store.dispatch(readHistory(CHAT) as never) as unknown as Promise<boolean>;
 }
 
 const json = (body: unknown) => new Response(JSON.stringify(body), {status: 200, headers: {"Content-Type": "application/json"}});
@@ -75,15 +85,12 @@ describe("chatApi history cache — secret rows never reach chatDB/history", () 
 
     it("deleteMessage in a chat with decrypted secret messages writes no secret row and no plaintext", async () => {
         const store = makeStore();
-        const sub = store.dispatch(chatApi.endpoints.getChatHistory.initiate({myId: MY, chatId: CHAT}));
-        await sub;
+        expect(await read(store)).toBe(true);
         await waitFor(async () => (await storedHistory()) !== undefined);
 
         // What chatMiddleware does once the envelope is decrypted: plaintext + secret flag, in memory.
-        store.dispatch(chatApi.util.updateQueryData("getChatHistory", {myId: MY, chatId: CHAT}, (draft) => {
-            const row = draft.find((m) => m.id === SECRET_ID);
-            if (row) { row.text = SECRET_TEXT; row.secret = true; }
-        }));
+        store.dispatch(rowFixed({chatId: CHAT, id: SECRET_ID, fix: {text: SECRET_TEXT, secret: true}}));
+        expect(selectRows(store.getState(), CHAT)?.find((m) => m.id === SECRET_ID)).toMatchObject({text: SECRET_TEXT, secret: true});
 
         await store.dispatch(chatApi.endpoints.deleteMessage.initiate({chatId: CHAT, backendId: MINE_ID})).unwrap();
         await waitFor(async () => !(await storedHistory())?.some((m) => m.id === MINE_ID));
@@ -93,15 +100,13 @@ describe("chatApi history cache — secret rows never reach chatDB/history", () 
         expect(stored?.some((m) => m.secret === true)).toBe(false);
         expect(stored?.some((m) => m.text.startsWith("E2EE1:"))).toBe(false);
         expect(stored?.map((m) => m.id)).toEqual([PLAIN_ID]);   // ordinary rows are still cached
-        sub.unsubscribe();
     });
 
     it("the first load does not cache the envelope either", async () => {
         const store = makeStore();
-        const sub = store.dispatch(chatApi.endpoints.getChatHistory.initiate({myId: MY, chatId: CHAT}));
-        await sub;
+        expect(await read(store)).toBe(true);
+        expect(selectRows(store.getState(), CHAT)?.map((m) => m.id)).toEqual([PLAIN_ID, SECRET_ID, MINE_ID]);
         await waitFor(async () => (await storedHistory()) !== undefined);
         expect((await storedHistory())?.map((m) => m.id)).toEqual([PLAIN_ID, MINE_ID]);
-        sub.unsubscribe();
     });
 });

@@ -1,5 +1,5 @@
 import type {Middleware} from "@reduxjs/toolkit";
-import {chatApi} from "@/features/chat/rest/chatApi.ts";
+import {rowFixed} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import i18n from "@/shared/i18n";
 import {savePlaintext} from "../lib/atRest.ts";
@@ -52,16 +52,10 @@ function withPeerLock<T>(peer: string, fn: () => Promise<T>): Promise<T> {
 
 export const e2eeRecoveryMiddleware: Middleware = (store) => {
     type S = {user?: {id?: string}; ws?: {status?: string}};
-    const getMyId = () => (store.getState() as S).user?.id ?? "";
     const wsConnected = () => (store.getState() as S).ws?.status === "connected";
 
     const patchRow = (chatId: string, serverId: string, text: string) => {
-        const myId = getMyId();
-        if (!myId) return;
-        store.dispatch(chatApi.util.updateQueryData("getChatHistory", {myId, chatId}, (draft) => {
-            const row = draft?.find((r) => r.id === serverId);
-            if (row) { row.text = text; row.secret = true; }
-        }) as never);
+        store.dispatch(rowFixed({chatId, id: serverId, fix: {text, secret: true}}));
     };
 
     const sendRequestsFor = async (items: PendingItem[]) => {
