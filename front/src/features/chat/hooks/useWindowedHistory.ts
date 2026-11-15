@@ -1,6 +1,7 @@
 import {useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject} from "react";
-import {useDispatch} from "react-redux";
-import type {AppDispatch} from "@/store/store";
+import {useDispatch, useSelector} from "react-redux";
+import type {AppDispatch, RootState} from "@/store/store";
+import {selectChatHistory} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {loadOlderHistory} from "@/features/chat/thunk/loadOlderHistory.ts";
 import {MESSAGE_WINDOW_INITIAL, MESSAGE_WINDOW_STEP} from "@/shared/config/chat.ts";
 
@@ -18,10 +19,11 @@ export function useWindowedHistory<T>(
 ) {
     const dispatch = useDispatch<AppDispatch>();
     const [visibleCount, setVisibleCount] = useState(MESSAGE_WINDOW_INITIAL);
-    // reachedStart: the server has no older page (loadOlderHistory returned 0). loadingOlder: a network
-    // fetch is in flight. anchorRef: distance-from-bottom captured before revealing/loading older, so the
-    // viewport can be restored after the taller list renders.
-    const [reachedStart, setReachedStart] = useState(false);
+    // noOlder: the server has no older page — kept with the chat's rows (the chatHistory slice), so neither
+    // a read of the history nor leaving the chat forgets it (FR-016). loadingOlder: a network fetch is in
+    // flight. anchorRef: distance-from-bottom captured before revealing/loading older, so the viewport can
+    // be restored after the taller list renders.
+    const noOlder = useSelector((state: RootState) => !!selectChatHistory(state, selectedChatId)?.noOlder);
     const [loadingOlder, setLoadingOlder] = useState(false);
     const anchorRef = useRef<number | null>(null);
 
@@ -32,7 +34,6 @@ export function useWindowedHistory<T>(
     if (selectedChatId !== prevChatId) {
         setPrevChatId(selectedChatId);
         setVisibleCount(MESSAGE_WINDOW_INITIAL);
-        setReachedStart(false);
     }
 
     const shown = useMemo(
@@ -41,7 +42,7 @@ export function useWindowedHistory<T>(
     );
     // More to reveal: older messages already in memory, or the server may have more.
     const hasEarlierInMemory = messages.length > visibleCount;
-    const hasEarlier = hasEarlierInMemory || !reachedStart;
+    const hasEarlier = hasEarlierInMemory || !noOlder;
 
     // "Show earlier": reveal in-memory older messages first (windowing); once those run out, pull an
     // older page (`?before=`) and reveal it too. Capture the scroll anchor first.
@@ -53,16 +54,15 @@ export function useWindowedHistory<T>(
             setVisibleCount((c) => c + MESSAGE_WINDOW_STEP);
             return;
         }
-        if (reachedStart || !selectedChatId) return;
+        if (noOlder || !selectedChatId) return;
         setLoadingOlder(true);
         try {
             const n = await dispatch(loadOlderHistory(selectedChatId));
-            if (!n) setReachedStart(true);
-            else setVisibleCount((c) => c + n); // reveal the freshly-prepended older messages
+            if (n) setVisibleCount((c) => c + n); // reveal the freshly-prepended older messages
         } finally {
             setLoadingOlder(false);
         }
-    }, [loadingOlder, hasEarlierInMemory, reachedStart, selectedChatId, dispatch, listRef]);
+    }, [loadingOlder, hasEarlierInMemory, noOlder, selectedChatId, dispatch, listRef]);
 
     // Restore the viewport after older messages render at the top: keep the same distance from the
     // bottom so the content the user was reading stays put (no jump).

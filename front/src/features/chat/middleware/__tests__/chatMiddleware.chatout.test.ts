@@ -71,7 +71,7 @@ const rowsAfter = (d: Dispatched[], before: Array<Partial<ChatMessage>>) => {
     const chatId = "c1";
     const rows = before as ChatMessage[];
     const state: ChatHistoryState = {
-        byChat: {[chatId]: {rows, held: [], reading: 0, arrived: [], readEpoch: null, error: false, fromDisk: false, noOlder: false}},
+        byChat: {[chatId]: {rows, held: [], reading: 0, arrived: [], readEpoch: null, error: false, answered: true, noOlder: false}},
     };
     return d.reduce((s, a) => historyReducer(s, a), state).byChat[chatId].rows ?? [];
 };

@@ -28,8 +28,8 @@ export interface ChatHistory {
     readEpoch: number | null;
     /** The last read has failed. */
     error: boolean;
-    /** The rows came from the disk and no answer of the server has been merged yet. */
-    fromDisk: boolean;
+    /** The server has answered at least once: the rows are the chat, not only what this device had of it. */
+    answered: boolean;
     /** The server has nothing older than the first row. */
     noOlder: boolean;
 }
@@ -40,7 +40,7 @@ export interface ChatHistoryState {
 
 const initialState: ChatHistoryState = {byChat: {}};
 
-const empty = (): ChatHistory => ({held: [], reading: 0, arrived: [], readEpoch: null, error: false, fromDisk: false, noOlder: false});
+const empty = (): ChatHistory => ({held: [], reading: 0, arrived: [], readEpoch: null, error: false, answered: false, noOlder: false});
 
 function chatOf(state: ChatHistoryState, chatId: string): ChatHistory {
     return state.byChat[chatId] ?? (state.byChat[chatId] = empty());
@@ -91,7 +91,7 @@ const chatHistorySlice = createSlice({
             chat.reading = Math.max(0, chat.reading - 1);
             if (chat.reading === 0) chat.arrived = [];
             chat.error = false;
-            chat.fromDisk = false;
+            chat.answered = true;
             if (whole) chat.noOlder = true;
             if (epoch !== null) chat.readEpoch = epoch;
         },
@@ -127,19 +127,22 @@ const chatHistorySlice = createSlice({
             if (action.payload.noOlder) chat.noOlder = true;
         },
 
-        /** The rows stored on the device: shown until the server answers. Never over what is already there. */
+        /**
+         * The rows stored on the device: shown until the server answers (FR-014). Never after an answer; what
+         * the chat took meanwhile (my message, a message from the socket) stays after them.
+         */
         diskTaken(state, action: PayloadAction<{chatId: string; rows: ChatMessage[]}>) {
             const chat = chatOf(state, action.payload.chatId);
-            if (chat.rows) return;
-            chat.rows = [...action.payload.rows];
-            chat.fromDisk = true;
+            if (chat.answered) return;
+            const rows = [...action.payload.rows];
+            for (const m of chat.rows ?? []) upsertMessage(rows, m);
+            chat.rows = rows;
         },
 
-        /** My own message, shown at once. Until story 2б (T316) only in a chat whose rows are in. */
+        /** My own message, shown at once, whether the chat's history has been read or not (FR-015). */
         echoPut(state, action: PayloadAction<{chatId: string; row: ChatMessage}>) {
-            const chat = state.byChat[action.payload.chatId];
-            if (!chat?.rows) return;
-            upsertMessage(chat.rows, action.payload.row);
+            const chat = chatOf(state, action.payload.chatId);
+            upsertMessage(chat.rows ?? (chat.rows = []), action.payload.row);
         },
 
         /** The server took my message: its row gets the server's id and time. */
