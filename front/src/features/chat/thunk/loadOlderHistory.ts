@@ -2,7 +2,7 @@ import type {AppDispatch, RootState} from "@/store/store";
 import {olderTaken, selectRows} from "@/features/chat/model/slices/chatHistorySlice";
 import {MESSENGER_API} from "@/shared/config/api";
 import {HISTORY_PAGE_SIZE} from "@/shared/config/chat";
-import {toMessages} from "@/features/chat/model/reconcileHistory";
+import {toMessages, dedupMessages} from "@/features/chat/model/reconcileHistory";
 import {hasMessage} from "@/features/chat/model/historyCache";
 import {isUlid} from "@/shared/ulid/ulid";
 import {logger} from "@/shared/logger/logger";
@@ -31,7 +31,7 @@ export function loadOlderHistory(chatId: string) {
                 credentials: "include",
             });
             if (!res.ok) return 0;
-            rows = toMessages(await res.json());
+            rows = dedupMessages(toMessages(await res.json()));
         } catch (e) {
             logger.error("loadOlderHistory failed", e as Error);
             return 0;

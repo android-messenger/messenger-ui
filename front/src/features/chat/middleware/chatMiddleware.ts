@@ -144,6 +144,11 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                 ensureSecretChat(store, chatId, true);
             }
 
+            // A peer on an earlier build sends an unconfirmed message again and again, and the server stores
+            // every frame as a message of its own: the same client id under another server id. It is one
+            // row (below) and one notification: a copy is acknowledged and told to the app, and nothing more.
+            const copy = isCopy(frame.senderId ?? msg.from, msg.clientId, msg.id);
+
             // Into the chat (spec 003, FR-012) — before the ACK below. The slice takes it if the chat's
             // rows are in or are being read, on the screen or not; a chat never opened reads it from the
             // server when it is opened. One message is one row (id || clientId, model/historyCache): a
@@ -228,7 +233,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                 try {
                     void push().notifyMessage({
                         conversationId: chatId, messageId: frame.messageId ?? msg.id, senderId: frame.senderId,
-                        hidden: hidden || isAppBackgrounded(),
+                        hidden: !copy && (hidden || isAppBackgrounded()),
                     }).catch((e) => logger.warn("push: the app did not take a socket message", e as Error));
                 } catch (e) { logger.warn("push: no notifyMessage in this app", e as Error); }
             }
@@ -246,7 +251,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                 // Read boundary = this just-delivered message's id (a server ULID), so the peer's
                 // durable receipt advances to it.
                 if (frame.senderId) dispatch({type: "ws/send", payload: buildReadIn(chatId, frame.senderId, frame.messageId)});
-            } else {
+            } else if (!copy) {   // a copy was counted and notified with the first one
                 dispatch(markChatUnread(chatId));
                 // Best-effort notify when not actively viewing.
                 playNotificationSound();
@@ -273,8 +278,12 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             // client id (so delete and the read boundary work by id) and the server's time (so ✓/✓✓
             // timing matches the server clock). The ACK does NOT carry the stored message's id in
             // messageId — that is the ack frame's own id.
+            // The chat is the one the message was queued for — not the one on the screen: the user may
+            // have gone to another chat before the confirmation came (FR-032). The frame names the chat
+            // only on a server that sends it (spec 002, S11).
+            const queued = st.outbox?.messages.find((m: {id: string}) => m.id === frame.correlationId);
             dispatch(markSent(frame.correlationId));
-            const chatId = frame.conversationId ?? selectedChatId;
+            const chatId = queued?.payload.conversationId ?? frame.conversationId;
             const at = takenAt(frame.serverMessageId, frame.serverTimestamp);
             // The STORED server ULID (backend contract: CHAT_ACK.serverMessageId — capture it!).
             // NOT messageId (that is the ack frame's own id). Reconciling my optimistic echo to it
@@ -339,6 +348,23 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
 
     return result;
 };
+
+// The client ids of the messages that came over the socket, with the server id each came under first.
+// Kept for this start of the application, the last SEEN_MAX of them.
+const SEEN_MAX = 500;
+const seen = new Map<string, string>();
+
+/** True if a message of this sender with this client id has already come under ANOTHER server id. The same
+ * server id again is the same delivery repeated (its acknowledgement was lost), not a copy. */
+function isCopy(senderId: string, clientId: string | undefined, serverId: string): boolean {
+    if (!senderId || !clientId) return false;
+    const key = `${senderId}|${clientId}`;
+    const first = seen.get(key);
+    if (first !== undefined) return first !== serverId;
+    seen.set(key, serverId);
+    if (seen.size > SEEN_MAX) seen.delete(seen.keys().next().value as string);
+    return false;
+}
 
 // Per-conversation "typing" auto-clear timers, so rapid TYPING_OUT frames don't stack timeouts.
 const typingTimers = new Map<string, ReturnType<typeof setTimeout>>();

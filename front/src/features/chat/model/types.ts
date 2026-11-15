@@ -25,7 +25,7 @@ export type OutboxMessage = {
     payload: OutboxMessagePayload;
     status: ChatMessageStatus;
     attempts: number;         // how many send attempts so far (for the retry cap)
-    lastAttemptAt?: number;   // epoch ms of the last send attempt (diagnostics)
+    lastAttemptAt?: number;   // epoch ms of the last send (the wait for a confirmation is measured from it)
     sentEpoch?: number;       // ws connection epoch it was last sent on (resend only in a newer epoch)
 };
 

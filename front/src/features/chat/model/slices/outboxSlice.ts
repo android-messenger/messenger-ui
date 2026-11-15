@@ -23,7 +23,10 @@ const outboxSlice = createSlice({
         mergeOutbox(state, action: PayloadAction<Pick<OutboxState, "messages"> | null>) {
             state.restored = true;
             const have = new Set(state.messages.map((m) => m.id));
-            const stored = (action.payload?.messages ?? []).filter((m) => !have.has(m.id));
+            // A stored message that was on its way went over a connection of the start before: the numbers of
+            // the connections begin anew, so it is "not sent yet" here and goes out on the first connection.
+            const stored = (action.payload?.messages ?? []).filter((m) => !have.has(m.id))
+                .map((m) => (m.status === "sending" ? {...m, status: "pending" as const, sentEpoch: undefined} : m));
             if (stored.length === 0) return;
             state.messages = [...stored, ...state.messages];
             state.outboxVersion = bumpVersion();
@@ -48,8 +51,8 @@ const outboxSlice = createSlice({
             state.outboxVersion = bumpVersion();
         },
 
-        // Mark a message in-flight and record the attempt + the connection epoch it was sent on
-        // (drives the duplicate-safe, once-per-epoch resend + the retry cap).
+        // The message has gone out: over which connection (one frame per connection) and when (the wait
+        // for a confirmation is measured from here).
         markSending(state, action: PayloadAction<{ id: string; at: number; epoch: number }>) {
             const msg = state.messages.find(m => m.id === action.payload.id);
             if (msg) {

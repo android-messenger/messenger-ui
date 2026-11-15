@@ -1,11 +1,10 @@
 import {describe, it, expect, vi} from "vitest";
 import {flushOutbox} from "../sendOutboxThunk";
-import {OUTBOX_RETRY_MAX_ATTEMPTS, OUTBOX_ACK_RESEND_MS} from "@/shared/config/outbox";
+import {OUTBOX_RETRY_MAX_ATTEMPTS, OUTBOX_SEND_TIMEOUT_MS} from "@/shared/config/outbox";
 
-// Delivery-first resend: an un-ACKed "sending" message is RESENT on the SAME connection once the ACK
-// window (OUTBOX_ACK_RESEND_MS) elapses, up to MAX_ATTEMPTS, then marked failed. Within the window we
-// wait for the CHAT_ACK and do NOT resend. This favors never LOSING a message over avoiding a
-// server-side duplicate (duplicates are collapsed client-side by the stable client messageId).
+// One frame per connection: a message with no confirmation is not sent again over the connection it went
+// over; it goes out once on every new connection, and is marked failed when a living connection is silent
+// for OUTBOX_SEND_TIMEOUT_MS or after MAX_ATTEMPTS connections (spec 003, FR-030, FR-031).
 type Msg = {
     id: string; idempotencyKey: string; payload: unknown; status: string;
     attempts: number; sentEpoch?: number; lastAttemptAt?: number;
@@ -31,7 +30,7 @@ const msg = (over: Partial<Msg> = {}): Msg => ({
 
 const ago = (ms: number) => Date.now() - ms;
 
-describe("flushOutbox (delivery-first)", () => {
+describe("flushOutbox (one frame per connection)", () => {
     it("does nothing when disconnected", async () => {
         const d = await run({ws: {status: "disconnected", epoch: 3}, outbox: {messages: [msg()]}});
         expect(sends(d)).toHaveLength(0);
@@ -44,30 +43,29 @@ describe("flushOutbox (delivery-first)", () => {
         expect(marksSending(d)[0].payload).toMatchObject({id: "m1", epoch: 5});
     });
 
-    it("does NOT resend within the ACK window (waits for CHAT_ACK)", async () => {
+    it("does not resend over the same connection, however long ago it was sent (below the limit)", async () => {
         const d = await run({
             ws: {status: "connected", epoch: 5},
-            outbox: {messages: [msg({status: "sending", attempts: 1, sentEpoch: 5, lastAttemptAt: ago(1_000)})]},
+            outbox: {messages: [msg({status: "sending", attempts: 1, sentEpoch: 5, lastAttemptAt: ago(OUTBOX_SEND_TIMEOUT_MS - 1_000)})]},
         });
         expect(sends(d)).toHaveLength(0);
         expect(marksSending(d)).toHaveLength(0);
+        expect(marksFailed(d)).toHaveLength(0);
     });
 
-    it("RESENDS an un-ACKed message past the ACK window on the SAME epoch (never lose)", async () => {
+    it("marks it failed, without sending, once the same connection is silent past the limit", async () => {
         const d = await run({
             ws: {status: "connected", epoch: 5},
-            outbox: {messages: [msg({status: "sending", attempts: 1, sentEpoch: 5,
-                lastAttemptAt: ago(OUTBOX_ACK_RESEND_MS + 1_000)})]},
+            outbox: {messages: [msg({status: "sending", attempts: 1, sentEpoch: 5, lastAttemptAt: ago(OUTBOX_SEND_TIMEOUT_MS)})]},
         });
-        expect(sends(d)).toHaveLength(1);
-        expect(marksSending(d)[0].payload).toMatchObject({id: "m1", epoch: 5});
+        expect(sends(d)).toHaveLength(0);
+        expect(marksFailed(d)[0].payload).toBe("m1");
     });
 
-    it("resends an un-ACKed message after a reconnect (newer epoch)", async () => {
+    it("resends after a reconnect (newer epoch), at once", async () => {
         const d = await run({
             ws: {status: "connected", epoch: 6},
-            outbox: {messages: [msg({status: "sending", attempts: 1, sentEpoch: 5,
-                lastAttemptAt: ago(OUTBOX_ACK_RESEND_MS + 1_000)})]},
+            outbox: {messages: [msg({status: "sending", attempts: 1, sentEpoch: 5, lastAttemptAt: ago(100)})]},
         });
         expect(sends(d)).toHaveLength(1);
         expect(marksSending(d)[0].payload).toMatchObject({id: "m1", epoch: 6});
@@ -76,8 +74,7 @@ describe("flushOutbox (delivery-first)", () => {
     it("gives up (markFailed) once attempts hit the cap, without sending", async () => {
         const d = await run({
             ws: {status: "connected", epoch: 9},
-            outbox: {messages: [msg({status: "sending", attempts: OUTBOX_RETRY_MAX_ATTEMPTS, sentEpoch: 1,
-                lastAttemptAt: ago(OUTBOX_ACK_RESEND_MS + 1_000)})]},
+            outbox: {messages: [msg({status: "sending", attempts: OUTBOX_RETRY_MAX_ATTEMPTS, sentEpoch: 1, lastAttemptAt: ago(1_000)})]},
         });
         expect(sends(d)).toHaveLength(0);
         expect(marksFailed(d)[0].payload).toBe("m1");
