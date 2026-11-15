@@ -6,6 +6,7 @@ import {idsApi} from "@/features/directory/idsApi.ts";
 import {clearAllLocalData} from "@/features/chat/db/db.ts";
 import {clearAllDrafts} from "@/features/chat/model/drafts.ts";
 import {clearSecretChats} from "@/features/chat/model/slices/secretChatsSlice.ts";
+import {historyForgotten} from "@/features/chat/model/slices/chatHistorySlice.ts";
 
 /**
  * Full client-state teardown on logout, orchestrated at the composition root (store) — the ONE layer
@@ -21,6 +22,7 @@ export const logoutResetClientState = () => (dispatch: AppDispatch) => {
     dispatch({type: "ws/disconnect"});
     dispatch(clearUser());
     dispatch(clearSecretChats());
+    dispatch(historyForgotten());
     dispatch(chatApi.util.resetApiState());
     dispatch(contactsApi.util.resetApiState());
     dispatch(idsApi.util.resetApiState());

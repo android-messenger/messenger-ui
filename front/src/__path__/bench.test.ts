@@ -61,7 +61,7 @@ describe("1.1: the bench plays the server, the socket and the app; everything el
 
         const b = await first.restart();
         expect(b.store).not.toBe(first.store);
-        expect(b.m.sync).not.toBe(first.m.sync);                          // module state starts empty
+        expect(b.m.read).not.toBe(first.m.read);                          // module state starts empty
         expect(b.store.getState().user.id).not.toBe(MY);                  // nobody is signed in yet
         expect(b.queue().map((m) => m.payload.payload?.body)).toEqual(["queued"]);
     });

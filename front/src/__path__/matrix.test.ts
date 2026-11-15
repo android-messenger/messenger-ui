@@ -52,6 +52,15 @@ describe("the table of scenarios and the coverage threshold", () => {
         expect(wrong).toEqual([]);
     });
 
+    // SC-004: the messages of a chat live in the chatHistory slice; the cache of a request holds none.
+    it("no source reads or writes a chat's messages through the cache of a request", () => {
+        const found = Object.entries(sources)
+            .filter(([path]) => path !== "/src/__path__/matrix.test.ts")
+            .filter(([, text]) => /getChatHistory|useGetChatHistoryQuery|historySync/.test(text))
+            .map(([path]) => path);
+        expect(found).toEqual([]);
+    });
+
     it("1.3: the check of a pull request measures the coverage of the message path and fails below the threshold", () => {
         const scripts = (JSON.parse(build["/package.json"]) as {scripts: Record<string, string>}).scripts;
         expect(scripts["test:cov"]).toMatch(/vitest run .*--coverage/);

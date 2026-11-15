@@ -28,7 +28,7 @@ export const ChatMessageSchema = z.object({
     // Set client-side when the message travelled E2EE (its wire body was a secret envelope). Drives the
     // 🔒 marker in the bubble; never comes from the server.
     // It is ALSO the "do not write to disk" flag: the history cache (features/chat/db/db.ts, toDiskRows)
-    // drops rows with secret === true. Any code that puts DECRYPTED text into the getChatHistory cache
+    // drops rows with secret === true. Any code that puts DECRYPTED text into a row of the chatHistory slice
     // MUST set it — a decrypted row without the flag would be persisted in the clear.
     secret: z.boolean().optional(),
     unsaved: z.boolean().optional(),   // secret text shown but not stored on this device

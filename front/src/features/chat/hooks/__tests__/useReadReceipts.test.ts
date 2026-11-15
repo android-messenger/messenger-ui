@@ -4,13 +4,18 @@ import {createElement, type ReactNode} from "react";
 import {Provider} from "react-redux";
 import {configureStore} from "@reduxjs/toolkit";
 
-import {chatApi} from "@/features/chat/rest/chatApi";
+import chatHistoryReducer, {answerTaken} from "@/features/chat/model/slices/chatHistorySlice";
+import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 import {useReadReceipts} from "../useReadReceipts";
 
 const ULID = "01KY29D4BHHB40EW2FKMHR6V7M";
 const ULID2 = "01KY29D4BHHB40EW2FKMHR6V7N";
 
 type Sent = Record<string, unknown>;
+
+const row = (id: string): ChatMessage => ({
+    id, chatId: "c1", from: "peer", to: "me", text: "x", createdAt: new Date(0), status: "sent",
+});
 
 function setVisibility(v: "visible" | "hidden") {
     Object.defineProperty(document, "visibilityState", {configurable: true, get: () => v});
@@ -27,13 +32,13 @@ async function makeHarness(opts: {wsStatus?: string; history?: Array<{id: string
         reducer: {
             user: () => ({id: "me"}),
             ws: (state = {status: opts.wsStatus ?? "connected"}) => state,
-            [chatApi.reducerPath]: chatApi.reducer,
+            chatHistory: chatHistoryReducer,
         },
-        middleware: (gDM) => gDM({serializableCheck: false}).concat(chatApi.middleware, recorder),
+        middleware: (gDM) => gDM({serializableCheck: false}).concat(recorder),
     });
     if (opts.history) {
-        // Await so the fulfilled cache entry is applied before the hook mounts and reads it.
-        await store.dispatch(chatApi.util.upsertQueryData("getChatHistory", {myId: "me", chatId: "c1"}, opts.history as never));
+        // The chat's rows are in the slice before the hook mounts and reads them.
+        store.dispatch(answerTaken({chatId: "c1", answer: opts.history.map((m) => row(m.id)), whole: true, epoch: null}));
     }
     const wrapper = ({children}: {children: ReactNode}) => createElement(Provider, {store, children});
     return {wrapper, sent};

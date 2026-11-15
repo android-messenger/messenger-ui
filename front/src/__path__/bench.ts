@@ -56,7 +56,7 @@ export function row(o: {id: string; chat: string; from: string; to: string; body
 
 /** The application's modules a test reaches for. Loaded after the module registry is reset. */
 async function load() {
-    const [store, logout, api, groups, service, mapper, outbox, chatUi, ws, sync, db, lists, drafts, user, session, kratos, flush, config] =
+    const [store, logout, api, groups, service, mapper, outbox, chatUi, ws, history, read, older, db, lists, drafts, user, session, kratos, flush, config] =
         await Promise.all([
             import("@/store/store"),
             import("@/store/logout"),
@@ -67,7 +67,9 @@ async function load() {
             import("@/features/chat/model/slices/outboxSlice"),
             import("@/features/chat/model/slices/chatUiSlice"),
             import("@/infrastructure/slices/websocketSlice"),
-            import("@/features/chat/model/historySync"),
+            import("@/features/chat/model/slices/chatHistorySlice"),
+            import("@/features/chat/thunk/readHistory"),
+            import("@/features/chat/thunk/loadOlderHistory"),
             import("@/features/chat/db/db"),
             import("@/features/chat/model/sealedLists"),
             import("@/features/chat/model/drafts"),
@@ -77,7 +79,7 @@ async function load() {
             import("@/features/chat/thunk/sendOutboxThunk"),
             import("@/shared/config/api"),
         ]);
-    return {store, logout, api, groups, service, mapper, outbox, chatUi, ws, sync, db, lists, drafts, user, session, kratos, flush, config};
+    return {store, logout, api, groups, service, mapper, outbox, chatUi, ws, history, read, older, db, lists, drafts, user, session, kratos, flush, config};
 }
 export type Modules = Awaited<ReturnType<typeof load>>;
 
@@ -352,8 +354,6 @@ async function boot(w: World, settled: boolean): Promise<Bench> {
 }
 
 function assemble(w: World, mine: Run, m: Modules, store: ReturnType<Modules["store"]["configureAppStore"]>) {
-    const myId = () => store.getState().user.id;
-    const historyArg = (chatId: string) => ({myId: myId(), chatId});
     const openSocket = () => mine.sockets.find((s) => s.readyState === FakeSocket.OPEN);
 
     return {
@@ -454,28 +454,27 @@ function assemble(w: World, mine: Run, m: Modules, store: ReturnType<Modules["st
             show() { pageHidden(false); },
         },
 
-        /** The user opens the chat: it is selected and its history is read. */
+        /** The user opens the chat: it is selected and — as useChatMessages does — read if it has no rows. */
         open(chatId: string) {
             store.dispatch(m.chatUi.setSelectedChatId(chatId));
-            const sub = store.dispatch(m.api.chatApi.endpoints.getChatHistory.initiate(historyArg(chatId)));
             return {
                 /** Settles when the first read has ended, well or not. */
-                read: sub as Promise<unknown>,
+                read: store.dispatch(m.read.openHistory(chatId)) as Promise<unknown>,
                 /** The chat is read again: return to the screen, "retry", an attachment was sent. */
-                reread: () => store.dispatch(m.api.chatApi.endpoints.getChatHistory.initiate(historyArg(chatId), {forceRefetch: true, subscribe: false})) as Promise<unknown>,
-                close() { sub.unsubscribe(); store.dispatch(m.chatUi.setSelectedChatId(null)); },
+                reread: () => store.dispatch(m.read.readHistory(chatId)) as Promise<unknown>,
+                /** The chat leaves the screen: its rows go to the disk. */
+                async close() {
+                    await store.dispatch(m.read.storeHistory(chatId));
+                    store.dispatch(m.chatUi.setSelectedChatId(null));
+                },
             };
         },
         /** What the chat shows: its messages in order, or undefined when it has nothing to show. */
-        screen(chatId: string) {
-            return m.api.chatApi.endpoints.getChatHistory.select(historyArg(chatId))(store.getState() as never).data;
-        },
+        screen: (chatId: string) => m.history.selectRows(store.getState(), chatId),
         /** The read of the chat's history has failed and the screen says so. */
-        readFailed(chatId: string): boolean {
-            return m.api.chatApi.endpoints.getChatHistory.select(historyArg(chatId))(store.getState() as never).isError;
-        },
+        readFailed: (chatId: string): boolean => !!m.history.selectChatHistory(store.getState(), chatId)?.error,
         /** The chat cannot be proved complete and will be read again. */
-        stale: (chatId: string) => m.sync.isStale(chatId, store.getState().ws),
+        stale: (chatId: string) => m.history.isStale(store.getState(), chatId),
         /** The send queue. */
         queue: () => store.getState().outbox.messages,
         /** Error lines shown to the user. */

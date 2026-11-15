@@ -21,14 +21,13 @@ vi.mock("../pendingStore.ts", () => ({
     allPending: h.allPending, removePending: h.removePending,
     addPending: vi.fn(async () => []), bumpAttempt: vi.fn(async () => {}),
 }));
-vi.mock("@/features/chat/rest/chatApi.ts", () => ({
-    chatApi: {util: {updateQueryData: vi.fn((endpoint, args, recipe) => ({type: "uqd", endpoint, args, recipe}))}},
-}));
 vi.mock("@/shared/i18n", () => ({default: {t: (k: string) => k}}));
 
 import {e2eeRecoveryMiddleware} from "../e2eeRecoveryMiddleware.ts";
 import {RECOVER_RESP} from "../protocol.ts";
 import {presenceJoin} from "@/features/presence/model/presenceSlice.ts";
+import historyReducer, {type ChatHistoryState} from "@/features/chat/model/slices/chatHistorySlice.ts";
+import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema.ts";
 
 type Dispatched = {type: string; [k: string]: unknown};
 // Fresh timestamps: within the 48h recovery window and recently requested, so the reconnect-triggered
@@ -48,12 +47,17 @@ function harness() {
     return {dispatched, run};
 }
 const flush = () => new Promise((r) => setTimeout(r, 0));
-// Final text a given serverId settled on, after applying every getChatHistory patch recipe in order.
-const textFor = (d: Dispatched[], serverId: string) => {
-    const draft = [{id: serverId, text: "?", secret: false}];
-    for (const a of d) if (a.type === "uqd" && a.endpoint === "getChatHistory") (a.recipe as (x: unknown[]) => void)(draft);
-    return draft[0].text;
+// The row of a given serverId after the REAL reducer of the slice took every dispatched patch in order.
+const rowFor = (d: Dispatched[], serverId: string) => {
+    const chatId = "chat";
+    const rows = [{id: serverId, text: "?", secret: false} as ChatMessage];
+    const state: ChatHistoryState = {
+        byChat: {[chatId]: {rows, held: [], reading: 0, arrived: [], readEpoch: null, error: false, fromDisk: false, noOlder: false}},
+    };
+    return d.reduce((s, a) => historyReducer(s, a), state).byChat[chatId].rows![0];
 };
+// Final text a given serverId settled on.
+const textFor = (d: Dispatched[], serverId: string) => rowFor(d, serverId).text;
 const resp = (over: Record<string, unknown> = {}) =>
     ({type: RECOVER_RESP, from: "bob", conversationId: "chat", items: [], missing: [], ...over});
 
@@ -118,9 +122,7 @@ describe("recovery middleware — RECOVER_RESP handling", () => {
         const {dispatched, run} = harness();
         run(resp({items: [{mid: "c1", t: 3, b: "x"}]}));
         await flush();
-        const draft = [{id: "s1", text: "?", secret: false}];
-        for (const a of dispatched) if (a.type === "uqd" && a.endpoint === "getChatHistory") (a.recipe as (x: unknown[]) => void)(draft);
-        expect(draft[0]).toMatchObject({text: "hola", secret: true});
+        expect(rowFor(dispatched, "s1")).toMatchObject({text: "hola", secret: true});
     });
 });
 

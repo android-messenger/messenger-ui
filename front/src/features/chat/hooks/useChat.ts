@@ -156,7 +156,7 @@ export function useChat() {
     }, [clearChat, dispatch, selectedChatId, myId]);
 
     // Outbox delivery status (per-message 🕐 / ⚠ + retry/discard) lives in its own hook.
-    const {outboxStatusById, retryMessage, discardMessage} = useOutboxStatus({selectedChatId, myId});
+    const {outboxStatusById, retryMessage, discardMessage} = useOutboxStatus({selectedChatId});
 
     // Composer state + send + typing notifier live in their own hook.
     const {messageInput, setMessageInput, sendMessage, forwardMessage, notifyTyping} =

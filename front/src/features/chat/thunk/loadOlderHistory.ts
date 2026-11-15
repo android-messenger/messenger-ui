@@ -1,5 +1,5 @@
 import type {AppDispatch, RootState} from "@/store/store";
-import {chatApi} from "@/features/chat/rest/chatApi";
+import {olderTaken, selectRows} from "@/features/chat/model/slices/chatHistorySlice";
 import {MESSENGER_API} from "@/shared/config/api";
 import {HISTORY_PAGE_SIZE} from "@/shared/config/chat";
 import {toMessages} from "@/features/chat/model/reconcileHistory";
@@ -9,7 +9,7 @@ import {logger} from "@/shared/logger/logger";
 
 /**
  * Pull the page of history immediately older than what's loaded (`?before=<oldest ULID>`) and
- * PREPEND it into the getChatHistory cache. Returns the count of NEW messages added — 0 means we
+ * PREPEND it to the chat's rows (the chatHistory slice). Returns the count of NEW messages added — 0 means we
  * reached the start (or nothing more), so the caller can stop offering "show earlier".
  *
  * `before` must be a real server ULID; our own not-yet-reconciled temp client ids can't be a cursor,
@@ -17,9 +17,8 @@ import {logger} from "@/shared/logger/logger";
  */
 export function loadOlderHistory(chatId: string) {
     return async (dispatch: AppDispatch, getState: () => RootState): Promise<number> => {
-        const myId = (getState().user?.id as string) || "";
-        if (!myId || !chatId) return 0;
-        const data = chatApi.endpoints.getChatHistory.select({myId, chatId})(getState())?.data;
+        if (!chatId) return 0;
+        const data = selectRows(getState(), chatId);
         if (!data || data.length === 0) return 0;
 
         const before = data.find((m) => isUlid(m.id))?.id;
@@ -39,16 +38,12 @@ export function loadOlderHistory(chatId: string) {
         }
         if (!rows.length) return 0;
 
-        let added = 0;
-        dispatch(
-            chatApi.util.updateQueryData("getChatHistory", {myId, chatId}, (draft) => {
-                // Canonical id||clientId dedup (model/historyCache); rows are ASC and older than draft[0],
-                // so PREPEND to keep the array chronological (loadOlderHistory's cursor reads draft order).
-                const fresh = rows.filter((m) => !hasMessage(draft, m));
-                added = fresh.length;
-                if (fresh.length) draft.unshift(...fresh);
-            })
-        );
+        // Canonical id||clientId dedup (model/historyCache); the page is ASC and older than the first row,
+        // so the slice PREPENDS it and the rows stay chronological (the cursor above reads their order).
+        const now = selectRows(getState(), chatId);
+        if (!now) return 0;
+        const added = rows.filter((m) => !hasMessage(now, m)).length;
+        dispatch(olderTaken({chatId, rows, noOlder: rows.length < HISTORY_PAGE_SIZE}));
         return added;
     };
 }

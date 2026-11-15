@@ -1,6 +1,9 @@
 import {beforeEach, describe, expect, it, vi} from "vitest";
 import {chatMessagesService} from "../chatMessages.service";
 import {chatApi} from "@/features/chat/rest/chatApi";
+import {readHistory} from "@/features/chat/thunk/readHistory";
+import chatHistoryReducer, {answerTaken, chatCleared, echoPut, selectRows} from "@/features/chat/model/slices/chatHistorySlice";
+import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 import {logger} from "@/shared/logger/logger";
 
 
@@ -11,12 +14,13 @@ vi.mock("@/features/chat/rest/chatApi", () => ({
         util: {
             updateQueryData: vi.fn(),
         },
-        endpoints: {
-            getChatHistory: {
-                initiate: vi.fn(),
-            },
-        },
+        endpoints: {},
     },
+}));
+
+// The read of a chat's history (the thunk the service dispatches).
+vi.mock("@/features/chat/thunk/readHistory", () => ({
+    readHistory: vi.fn(),
 }));
 
 vi.mock("@/features/chat/thunk/sendOutboxThunk", () => ({
@@ -68,11 +72,12 @@ describe("chatMessagesService", () => {
 
         expect(unwrap).toHaveBeenCalled();
 
-        expect(chatApi.util.updateQueryData).toHaveBeenCalledWith(
-            "getChatHistory",
-            {myId: "user1", chatId: "chat123"},
-            expect.any(Function)
-        );
+        // The chat's rows are emptied in the slice.
+        expect(dispatch).toHaveBeenCalledWith(chatCleared({chatId: "chat123"}));
+        const row: ChatMessage = {id: "m1", chatId: "chat123", from: "user2", to: "user1", text: "x", createdAt: new Date(0), status: "sent"};
+        const before = chatHistoryReducer(undefined, answerTaken({chatId: "chat123", answer: [row], whole: true, epoch: null}));
+        const after = chatHistoryReducer(before, dispatch.mock.calls[0][0]);
+        expect(selectRows({chatHistory: after}, "chat123")).toEqual([]);
 
         expect(dispatch).toHaveBeenCalledTimes(1);
     });
@@ -98,26 +103,22 @@ describe("chatMessagesService", () => {
     it("reloadChatHistory: does nothing if chatId is null", () => {
         const dispatch = vi.fn();
 
-        const result = chatMessagesService.reloadChatHistory(dispatch, "user1", null);
+        const result = chatMessagesService.reloadChatHistory(dispatch, null);
 
         expect(result).toBeUndefined();
         expect(dispatch).not.toHaveBeenCalled();
     });
 
-    it("reloadChatHistory calls initiate with correct params and dispatches it", () => {
+    it("reloadChatHistory calls readHistory with the chat and dispatches it", () => {
         const dispatch = vi.fn();
         const thunk = vi.fn();
 
-        //@ts-expect-error("no need to use types")
-        chatApi.endpoints.getChatHistory.initiate.mockReturnValue(thunk);
+        vi.mocked(readHistory).mockReturnValue(thunk as unknown as ReturnType<typeof readHistory>);
 
-        chatMessagesService.reloadChatHistory(dispatch, "user1", "chat123");
+        chatMessagesService.reloadChatHistory(dispatch, "chat123");
 
-        // проверяем, с какими аргументами был вызван initiate
-        expect(chatApi.endpoints.getChatHistory.initiate).toHaveBeenCalledWith(
-            {myId: "user1", chatId: "chat123"},
-            {forceRefetch: true}
-        );
+        // which chat the read was asked for
+        expect(readHistory).toHaveBeenCalledWith("chat123");
 
         expect(dispatch).toHaveBeenCalledWith(thunk);
     });
@@ -125,9 +126,9 @@ describe("chatMessagesService", () => {
     it("reloadChatHistory does nothing if chatId is null", () => {
         const dispatch = vi.fn();
 
-        chatMessagesService.reloadChatHistory(dispatch, "user1", null);
+        chatMessagesService.reloadChatHistory(dispatch, null);
 
-        expect(chatApi.endpoints.getChatHistory.initiate).not.toHaveBeenCalled();
+        expect(readHistory).not.toHaveBeenCalled();
         expect(dispatch).not.toHaveBeenCalled();
     });
 
@@ -165,7 +166,7 @@ describe("chatMessagesService", () => {
         expect(typeof firstCall.payload.id).toBe("string");
         expect(typeof firstCall.payload.idempotencyKey).toBe("string");
 
-        // Last dispatch flushes the outbox (the optimistic getChatHistory patch sits in between).
+        // Last dispatch flushes the outbox (the optimistic echo, echoPut, sits in between).
         const calls = dispatch.mock.calls;
         expect(calls[calls.length - 1][0].type).toBe("outbox/flush-mock-thunk");
     });
@@ -174,9 +175,11 @@ describe("chatMessagesService", () => {
         const text = "meet at the old bridge at nine";
         await chatMessagesService.enqueueChatMessage(dispatch, text, myId, "chat-secret", "recipient1", undefined, true);
 
-        // The optimistic echo recipe, applied to a not-yet-loaded history.
-        const call = vi.mocked(chatApi.util.updateQueryData).mock.calls.find((c) => c[0] === "getChatHistory");
-        const echo = (call?.[2] as unknown as (d: unknown) => Array<{text: string; secret?: boolean}>)(undefined);
+        // The optimistic echo, put into the chat's rows (a chat whose rows are in the slice).
+        const put = dispatch.mock.calls.map((c) => c[0]).find((a) => a?.type === echoPut.type);
+        expect(put.payload.chatId).toBe("chat-secret");
+        const loaded = chatHistoryReducer(undefined, answerTaken({chatId: "chat-secret", answer: [], whole: true, epoch: null}));
+        const echo = selectRows({chatHistory: chatHistoryReducer(loaded, put)}, "chat-secret") ?? [];
         expect(echo[0].text).toBe(text);
         expect(echo[0].secret).toBe(true);
 
