@@ -1,6 +1,8 @@
 import {describe, it, expect, afterEach} from "vitest";
 import {act, renderHook} from "@testing-library/react";
-import {bench, stop, row} from "./bench";
+import {useSelector} from "react-redux";
+import {bench, stop, row, type BenchOptions} from "./bench";
+import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 
 // Spec 003, story 2 — what the chat has taken stays in it. The messages live in the chatHistory slice;
 // the socket writes there whether the chat is on the screen or not, and an answer of the history is merged
@@ -12,7 +14,16 @@ const CHAT = "c1";
 const M1 = "01ARZ3NDEKTSV4RRFFQ69G5FA1";
 const M2 = "01ARZ3NDEKTSV4RRFFQ69G5FA2";
 const M3 = "01ARZ3NDEKTSV4RRFFQ69G5FA3";
-const msg = (id: string, from: string, body: string) => row({id, chat: CHAT, from, to: from === MY ? PEER : MY, body});
+const T = 1_700_000_000_000;
+const msg = (id: string, from: string, body: string, at?: number) => row({id, chat: CHAT, from, to: from === MY ? PEER : MY, body, at});
+/** A row as the device's copy of the chat holds it. */
+const stored = (id: string, from: string, text: string): ChatMessage =>
+    ({id, chatId: CHAT, from, to: from === MY ? PEER : MY, text, createdAt: new Date(T), status: "sent"});
+/** A server id: they order as their numbers do. */
+const U = (n: number) => "01ARZ3NDEKTSV4RRFFQ6" + String(n).padStart(6, "0");
+const page = (from: number, to: number) => Array.from({length: to - from + 1}, (_, i) => msg(U(from + i), PEER, `m${from + i}`, T + from + i));
+/** The two kinds of disk: a browser keeps the records open, the Android app seals them with the Vault. */
+const DISKS: Array<[string, BenchOptions]> = [["browser", {}], ["app", {app: true}]];
 
 type B = Awaited<ReturnType<typeof bench>>;
 /** Waits until the device's copy of the chat holds exactly these messages (a write is never awaited by the app). */
@@ -347,5 +358,263 @@ describe("the chat on the screen (useChatMessages)", () => {
         await b.settle();
         expect(b.server.history(CHAT).asked()).toBe(1);
         view.unmount();
+    });
+});
+
+// Story 2б — the device's copy, my own message, the older pages.
+
+/** A signed-in user on a device that holds the chat on its disk. */
+async function device(opts: BenchOptions, rows: ChatMessage[]) {
+    const b = await bench(opts);
+    await b.signIn(MY);
+    await b.m.db.saveHistoryToDB(CHAT, rows);
+    return b;
+}
+const ids = (b: B) => b.screen(CHAT)?.map((m) => m.id);
+/** The order on the screen: by time, as useChatMessages puts it. */
+const shown = (b: B) => [...(b.screen(CHAT) ?? [])].sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime()).map((m) => m.id);
+
+describe("story 2: the device's copy of the chat", () => {
+    afterEach(stop);
+
+    for (const [disk, opts] of DISKS) {
+        // Was A6 of the audit: the copy was read and dropped.
+        it(`2.3: the history stored on the device is shown before the server answers and stays when the read fails (${disk})`, async () => {
+            const b = await device(opts, [stored(M1, PEER, "first"), stored(M2, MY, "second")]);
+            const chat = b.open(CHAT);
+            await b.until(() => !!b.screen(CHAT), "the rows from the disk");
+            expect(ids(b)).toEqual([M1, M2]);
+            expect(b.screen(CHAT)!.every((m) => m.createdAt instanceof Date)).toBe(true);
+            await b.until(() => b.server.history(CHAT).waiting() === 1, "the request");   // the server has not answered
+
+            await b.server.history(CHAT).fail();
+            await chat.read;
+            expect(ids(b)).toEqual([M1, M2]);                                    // offline the chat is not empty
+            expect(b.readFailed(CHAT)).toBe(true);                               // and the screen says it is not fresh
+
+            const again = chat.reread();
+            await b.server.history(CHAT).answer([msg(M1, PEER, "first"), msg(M2, MY, "second"), msg(M3, PEER, "third")]);
+            await again;
+            expect(ids(b)).toEqual([M1, M2, M3]);
+            expect(b.readFailed(CHAT)).toBe(false);
+            await onDisk(b, [M1, M2, M3]);
+        });
+
+        it(`2.8: the text of a secret message stays in memory through a read of the history and never goes to the disk (${disk})`, async () => {
+            const b = await bench(opts);
+            await b.signIn(MY);
+            b.socket.connect();
+            const chat = b.open(CHAT);
+            await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
+            await chat.read;
+            b.socket.frame(msg(M2, PEER, "second"));
+            // the bench does not play decryption: the row gets its text the way the decryption gives it
+            b.store.dispatch(b.m.history.rowFixed({chatId: CHAT, id: M2, fix: {text: "the secret text", secret: true}}));
+
+            const reread = chat.reread();
+            await b.server.history(CHAT).answer([msg(M1, PEER, "first"), msg(M2, PEER, "second")]);
+            await reread;
+            expect(b.screen(CHAT)?.map((m) => m.text)).toEqual(["first", "the secret text"]);
+            await chat.close();
+            await onDisk(b, [M1]);
+
+            const next = await b.restart();                                      // the device's copy has no secret row
+            await next.signIn(MY);
+            const opened = next.open(CHAT);
+            await next.until(() => !!next.screen(CHAT), "the rows from the disk");
+            expect(next.screen(CHAT)?.map((m) => m.id)).toEqual([M1]);
+            await next.server.history(CHAT).fail();
+            await opened.read;
+        });
+    }
+
+    it("2.3: a chat shown from the disk is read from the server when it is opened again", async () => {
+        const b = await device({}, [stored(M1, PEER, "first")]);
+        const chat = b.open(CHAT);
+        await b.server.history(CHAT).fail();
+        await chat.read;
+        await chat.close();
+        const again = b.open(CHAT);
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first"), msg(M2, PEER, "second")]);
+        await again.read;
+        expect(ids(b)).toEqual([M1, M2]);
+        expect(b.server.history(CHAT).asked()).toBe(2);
+    });
+
+    it("2.3: a message that comes over the socket before the disk is read is not lost under the device's copy", async () => {
+        const b = await device({}, [stored(M1, PEER, "first")]);
+        b.socket.connect();
+        const chat = b.open(CHAT);
+        await b.m.service.chatMessagesService.enqueueChatMessage(b.store.dispatch, "hello", MY, CHAT, PEER);
+        const queued = b.queue()[0].id;
+        await b.until(() => (b.screen(CHAT)?.length ?? 0) === 2, "the rows from the disk");
+        expect(ids(b)).toEqual([M1, queued]);
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
+        await chat.read;
+        expect(ids(b)).toEqual([M1, queued]);
+    });
+
+    it("2.3: with the Vault closed nothing is shown from the disk, and the record is not written over by a chat that was not read (app)", async () => {
+        const b = await device({app: true}, [stored(M1, PEER, "first"), stored(M2, PEER, "second")]);
+        b.app.lock();
+        const chat = b.open(CHAT);
+        await b.server.history(CHAT).fail();
+        await chat.read;
+        expect(b.screen(CHAT)).toBeUndefined();                                  // the record could not be opened
+        await b.m.service.chatMessagesService.enqueueChatMessage(b.store.dispatch, "hello", MY, CHAT, PEER);
+        expect(b.screen(CHAT)).toHaveLength(1);
+
+        b.app.unlock();
+        await chat.close();                                                      // the chat holds one row of mine: not the chat
+        await b.settle();
+        expect((await b.m.db.loadHistoryFromDB(CHAT))?.map((m) => m.id)).toEqual([M1, M2]);
+    });
+
+    it("2.7: a message deleted on the server does not come back from the device's copy", async () => {
+        const b = await device({}, [stored(M1, PEER, "first"), stored(M2, PEER, "second")]);
+        const chat = b.open(CHAT);
+        await b.until(() => !!b.screen(CHAT), "the rows from the disk");
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
+        await chat.read;
+        expect(ids(b)).toEqual([M1]);
+        await onDisk(b, [M1]);
+    });
+
+    it("2.7: a chat cleared on the server is empty after a read, whatever older pages were loaded", async () => {
+        const {b, chat} = await opened();
+        b.store.dispatch(b.m.history.olderTaken({chatId: CHAT, rows: [stored(U(1), PEER, "older")], noOlder: false}));
+        expect(ids(b)).toEqual([U(1), M1]);
+        const reread = chat.reread();
+        await b.server.history(CHAT).answer([]);
+        await reread;
+        expect(ids(b)).toEqual([]);
+    });
+});
+
+describe("story 2: my own message", () => {
+    afterEach(stop);
+
+    // Was A5 of the audit: queued and not shown.
+    it("2.4: in a chat whose history could not be read, my new message is shown, and stays when the chat is read", async () => {
+        const b = await bench();
+        await b.signIn(MY);
+        const chat = b.open(CHAT);
+        await b.server.history(CHAT).fail();
+        await chat.read;
+        await b.m.service.chatMessagesService.enqueueChatMessage(b.store.dispatch, "hello", MY, CHAT, PEER);
+        const queued = b.queue()[0].id;
+        expect(ids(b)).toEqual([queued]);                                        // the bubble with the clock
+
+        const again = chat.reread();
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
+        await again;
+        expect(ids(b)).toEqual([M1, queued]);
+    });
+
+    it("2.4: my message to a chat that was never opened is there when the chat is opened, and the chat is read", async () => {
+        const b = await bench();
+        await b.signIn(MY);
+        await b.m.service.chatMessagesService.enqueueChatMessage(b.store.dispatch, "hello", MY, CHAT, PEER);
+        const queued = b.queue()[0].id;
+        expect(ids(b)).toEqual([queued]);
+        const chat = b.open(CHAT);
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
+        await chat.read;
+        expect(ids(b)).toEqual([M1, queued]);
+        expect(b.server.history(CHAT).asked()).toBe(1);
+    });
+});
+
+describe("story 2: the older pages and the order", () => {
+    afterEach(stop);
+
+    /** The chat on the screen through useWindowedHistory, as ChatWindow uses it. */
+    async function windowed(b: B) {
+        const {useWindowedHistory} = await import("@/features/chat/hooks/useWindowedHistory");
+        const list = {current: null};
+        const none: ChatMessage[] = [];
+        return renderHook(({chatId}: {chatId: string | null}) => {
+            const rows = useSelector((s: ReturnType<B["store"]["getState"]>) => b.m.history.selectRows(s, chatId)) ?? none;
+            return useWindowedHistory(rows, chatId, list);
+        }, {wrapper: b.wrapper, initialProps: {chatId: CHAT as string | null}});
+    }
+    /** "Show earlier" until everything in memory is on the screen. */
+    async function revealAll(b: B, view: Awaited<ReturnType<typeof windowed>>) {
+        while (view.result.current.shown.length < (b.screen(CHAT)?.length ?? 0)) await act(() => view.result.current.showEarlier());
+    }
+
+    it("2.5: the older pages and 'show earlier' live through a read of the history", async () => {
+        const b = await bench();
+        await b.signIn(MY);
+        b.socket.connect();
+        const chat = b.open(CHAT);
+        await b.server.history(CHAT).answer(page(1000, 1199));                   // a full page: there may be more
+        await chat.read;
+        const view = await windowed(b);
+        await revealAll(b, view);
+        expect(view.result.current.hasEarlier).toBe(true);
+
+        // the server cannot be reached: nothing is added, and "show earlier" is still offered
+        b.server.reply("GET", /^\/chats\/c1\/messages\?.*before=/, () => new Response("{}", {status: 503}));
+        await act(() => view.result.current.showEarlier());
+        expect(b.screen(CHAT)).toHaveLength(200);
+        expect(view.result.current.hasEarlier).toBe(true);
+
+        b.server.reply("GET", /^\/chats\/c1\/messages\?.*before=/, () => ({messages: page(950, 999)}));
+        await act(() => view.result.current.showEarlier());                      // the last page: fewer rows than a full one
+        expect(view.result.current.shown).toHaveLength(250);
+        expect(view.result.current.hasEarlier).toBe(false);
+
+        const reread = chat.reread();
+        await b.server.history(CHAT).answer(page(1000, 1199));
+        await act(async () => { await reread; });
+        expect(ids(b)).toEqual(page(950, 1199).map((m) => m.messageId));         // the older page is still there
+        expect(view.result.current.shown).toHaveLength(250);
+        expect(view.result.current.hasEarlier).toBe(false);                      // and nothing older is offered
+
+        // the chat leaves the screen and comes back: the window starts at the tail, the start is still known
+        view.rerender({chatId: null});
+        view.rerender({chatId: CHAT});
+        expect(view.result.current.shown).toHaveLength(60);
+        await revealAll(b, view);
+        expect(view.result.current.hasEarlier).toBe(false);
+        expect(b.server.requests().filter((r) => r.path.includes("before=")).length).toBe(2);
+        view.unmount();
+    });
+
+    it("2.5: a chat whose whole history fits one page offers nothing earlier; a page with no rows ends the search", async () => {
+        const {b} = await opened();
+        const view = await windowed(b);
+        expect(view.result.current.hasEarlier).toBe(false);
+        view.unmount();
+
+        const other = await bench();
+        await other.signIn(MY);
+        const chat = other.open(CHAT);
+        await other.server.history(CHAT).answer(page(1000, 1199));
+        await chat.read;
+        other.server.reply("GET", /^\/chats\/c1\/messages\?.*before=/, () => ({messages: []}));
+        expect(await other.store.dispatch(other.m.older.loadOlderHistory(CHAT))).toBe(0);
+        expect(other.m.history.selectChatHistory(other.store.getState(), CHAT)?.noOlder).toBe(true);
+    });
+
+    it("2.6: the order on the screen does not change when the history is read again: the time is the server's", async () => {
+        const {b, chat} = await opened();                                        // M1 at T
+        await b.m.service.chatMessagesService.enqueueChatMessage(b.store.dispatch, "hello", MY, CHAT, PEER);
+        const queued = b.queue()[0].id;
+        b.socket.frame({type: "CHAT_ACK", conversationId: CHAT, correlationId: queued, serverMessageId: M2, serverTimestamp: T + 1000});
+        b.socket.frame(msg(M3, PEER, "third", T + 2500));                        // the frame's clock is not the table's
+        expect(shown(b)).toEqual([M1, M2, M3]);
+
+        const reread = chat.reread();
+        await b.server.history(CHAT).answer([
+            msg(M1, PEER, "first", T),
+            row({id: M2, chat: CHAT, from: MY, to: PEER, body: "hello", clientId: queued, at: T + 1000}),
+            msg(M3, PEER, "third", T + 2000),
+        ]);
+        await reread;
+        expect(shown(b)).toEqual([M1, M2, M3]);
+        expect(ids(b)).toEqual([M1, M2, M3]);
+        expect(b.screen(CHAT)?.map((m) => m.createdAt.getTime())).toEqual([T, T + 1000, T + 2000]);
     });
 });

@@ -4,7 +4,7 @@ import {bench, stop, row} from "./bench";
 // Audit 2026-11-14 (specs/002-reliable-delivery/audit.md), findings A1–A7, on the bench of spec 003.
 // Every test here states the behaviour AS IT IS NOW — a defect. The pull request that fixes a defect turns
 // its test over and gives it the number of its scenario (specs/003-message-path/test-matrix.md).
-// Turned over so far: A1 and A2 — scenarios 2.1 and 2.2 in history.test.ts.
+// Turned over so far: A1, A2, A6, A5 — scenarios 2.1, 2.2, 2.3, 2.4 in history.test.ts.
 
 const MY = "me";
 const PEER = "peer";
@@ -37,31 +37,6 @@ describe("1.2: the audit findings A1–A7 run on the bench", () => {
         await chat.read;
         expect(b.queue().map((m) => m.id)).toEqual([queued.id]);                 // still to be sent
         expect(b.screen(CHAT)?.map((m) => m.id)).toEqual([M1]);                  // DEFECT: and not on the screen
-    });
-
-    it("A5: in a chat whose history could not be read, my new message is queued but not shown", async () => {
-        const b = await bench();
-        await b.signIn(MY);
-        const chat = b.open(CHAT);
-        await b.server.history(CHAT).fail();
-        await chat.read;
-        expect(b.readFailed(CHAT)).toBe(true);
-        await b.m.service.chatMessagesService.enqueueChatMessage(b.store.dispatch, "hello", MY, CHAT, PEER);
-        expect(b.queue()).toHaveLength(1);
-        expect(b.screen(CHAT)).toBeUndefined();                                  // DEFECT: no bubble with the clock
-    });
-
-    it("A6: the history stored on the device is not shown while the first read is on its way, nor after it failed", async () => {
-        const b = await bench();
-        await b.m.db.saveHistoryToDB(CHAT, [{id: M1, chatId: CHAT, from: PEER, to: MY, text: "cached", createdAt: new Date(), status: "sent"}]);
-        await b.signIn(MY);
-        const chat = b.open(CHAT);
-        await b.settle();
-        expect(b.screen(CHAT)).toBeUndefined();                                  // DEFECT: the cache was read and dropped
-        await b.server.history(CHAT).fail();
-        await chat.read;
-        await b.settle();
-        expect(b.screen(CHAT)).toBeUndefined();                                  // DEFECT: offline the chat is empty
     });
 
     // Finding 9. The send queue is read from disk at the start, before anyone knows whose session this is.

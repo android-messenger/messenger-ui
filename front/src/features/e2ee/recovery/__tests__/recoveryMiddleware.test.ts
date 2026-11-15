@@ -52,7 +52,7 @@ const rowFor = (d: Dispatched[], serverId: string) => {
     const chatId = "chat";
     const rows = [{id: serverId, text: "?", secret: false} as ChatMessage];
     const state: ChatHistoryState = {
-        byChat: {[chatId]: {rows, held: [], reading: 0, arrived: [], readEpoch: null, error: false, fromDisk: false, noOlder: false}},
+        byChat: {[chatId]: {rows, held: [], reading: 0, arrived: [], readEpoch: null, error: false, answered: true, noOlder: false}},
     };
     return d.reduce((s, a) => historyReducer(s, a), state).byChat[chatId].rows![0];
 };

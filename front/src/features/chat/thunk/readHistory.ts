@@ -2,9 +2,9 @@ import type {AppDispatch, RootState} from "@/store/store";
 import {chatApi} from "@/features/chat/rest/chatApi";
 import {HISTORY_PAGE_SIZE} from "@/shared/config/chat";
 import {toMessages, dedupMessages} from "@/features/chat/model/reconcileHistory";
-import {answerTaken, liveEpoch, readFailed, readStarted, selectRows} from "@/features/chat/model/slices/chatHistorySlice";
+import {answerTaken, diskTaken, liveEpoch, readFailed, readStarted, selectChatHistory, selectRows} from "@/features/chat/model/slices/chatHistorySlice";
 import {setPeerLastReadId} from "@/features/chat/model/slices/chatUiSlice";
-import {saveHistoryToDB} from "@/features/chat/db/db";
+import {loadHistoryFromDB, saveHistoryToDB} from "@/features/chat/db/db";
 import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema";
 import {logger} from "@/shared/logger/logger";
 
@@ -112,20 +112,29 @@ async function readOnce(chatId: string, dispatch: AppDispatch, getState: () => R
 }
 
 /**
- * The chat comes to the screen. Its history is read if the chat has no rows yet; a chat that has rows
- * shows them, and is read again only when it is stale (useReconnectCatchup).
+ * The chat comes to the screen. Until the server has answered once, it is read: the device's copy goes
+ * to the screen first (FR-014) and stays if the server cannot be reached. A chat the server has answered
+ * for shows its rows, and is read again only when it is stale (useReconnectCatchup).
  */
 export function openHistory(chatId: string) {
     return async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
-        if (selectRows(getState(), chatId)) return;
-        await dispatch(readHistory(chatId));
+        if (selectChatHistory(getState(), chatId)?.answered) return;
+        const read = dispatch(readHistory(chatId));
+        const disk = await loadHistoryFromDB(chatId).catch(() => null);
+        // A sealed record keeps the time as text.
+        if (disk?.length) dispatch(diskTaken({chatId, rows: disk.map((m) => ({...m, createdAt: new Date(m.createdAt)}))}));
+        await read;
     };
 }
 
-/** The chat leaves the screen: its rows go to the disk as they are now. */
+/**
+ * The chat leaves the screen: its rows go to the disk as they are now. Only a chat the server has
+ * answered for: before that the rows are the device's copy itself, or less than it (my new message
+ * alone, when the copy could not be opened) — writing them would shorten the copy.
+ */
 export function storeHistory(chatId: string) {
     return async (_dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
-        const rows = selectRows(getState(), chatId);
-        if (rows) await saveHistoryToDB(chatId, rows).catch(() => { /* best-effort */ });
+        const chat = selectChatHistory(getState(), chatId);
+        if (chat?.answered && chat.rows) await saveHistoryToDB(chatId, chat.rows).catch(() => { /* best-effort */ });
     };
 }

@@ -40,7 +40,7 @@ describe("chatHistory: reading", () => {
         const s = run(start(), readStarted({chatId: CHAT}), readFailed({chatId: CHAT}), readStarted({chatId: CHAT}),
             answerTaken({chatId: CHAT, answer: [row(1), row(2)], whole: false, epoch: 4}));
         expect(ids(s)).toEqual([ULID(1), ULID(2)]);
-        expect(chat(s)).toMatchObject({reading: 0, error: false, readEpoch: 4, noOlder: false, fromDisk: false});
+        expect(chat(s)).toMatchObject({reading: 0, error: false, readEpoch: 4, noOlder: false, answered: true});
     });
 
     it("answerTaken: an empty answer is an empty chat, not an unknown one", () => {
@@ -183,22 +183,25 @@ describe("chatHistory: the other writers", () => {
     it("diskTaken: the device's copy is shown until the server answers", () => {
         const s = run(start(), diskTaken({chatId: CHAT, rows: [row(1), row(2)]}));
         expect(ids(s)).toEqual([ULID(1), ULID(2)]);
-        expect(chat(s).fromDisk).toBe(true);
+        expect(chat(s).answered).toBe(false);
         const answered = run(s, readStarted({chatId: CHAT}), answerTaken({chatId: CHAT, answer: [row(2), row(3)], whole: true, epoch: 1}));
         expect(ids(answered)).toEqual([ULID(2), ULID(3)]);
-        expect(chat(answered).fromDisk).toBe(false);
+        expect(chat(answered).answered).toBe(true);
     });
 
-    it("diskTaken: never over rows that are already there", () => {
+    it("diskTaken: never after an answer of the server; what the chat took before the disk was read stays", () => {
         const s = run(read(2), diskTaken({chatId: CHAT, rows: [row(7)]}));
         expect(ids(s)).toEqual([ULID(1), ULID(2)]);
-        expect(chat(s).fromDisk).toBe(false);
+        const early = run(start(), echoPut({chatId: CHAT, row: mine("q1")}), diskTaken({chatId: CHAT, rows: [row(1), row(2)]}));
+        expect(ids(early)).toEqual([ULID(1), ULID(2), "q1"]);
     });
 
-    it("echoPut: my message is shown at once, once; not in a chat without rows (until T316)", () => {
+    it("echoPut: my message is shown at once, once; also in a chat that has no rows yet", () => {
         const s = run(read(1), echoPut({chatId: CHAT, row: mine("q1")}), echoPut({chatId: CHAT, row: mine("q1")}));
         expect(ids(s)).toEqual([ULID(1), "q1"]);
-        expect(run(start(), echoPut({chatId: CHAT, row: mine("q1")}))).toEqual(start());
+        const unread = run(start(), echoPut({chatId: CHAT, row: mine("q1")}));
+        expect(ids(unread)).toEqual(["q1"]);
+        expect(chat(unread).answered).toBe(false);
     });
 
     it("rowFixed: changes the named fields of one row, found by id or by client id", () => {

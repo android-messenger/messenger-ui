@@ -9,8 +9,8 @@ import {logger} from "@/shared/logger/logger";
 
 /**
  * Pull the page of history immediately older than what's loaded (`?before=<oldest ULID>`) and
- * PREPEND it to the chat's rows (the chatHistory slice). Returns the count of NEW messages added — 0 means we
- * reached the start (or nothing more), so the caller can stop offering "show earlier".
+ * PREPEND it to the chat's rows (the chatHistory slice). Returns the count of NEW messages added. That the
+ * server has nothing older is written to the slice (`noOlder`); a request that failed says nothing about it.
  *
  * `before` must be a real server ULID; our own not-yet-reconciled temp client ids can't be a cursor,
  * so we pick the oldest loaded message that IS a ULID.
@@ -36,7 +36,10 @@ export function loadOlderHistory(chatId: string) {
             logger.error("loadOlderHistory failed", e as Error);
             return 0;
         }
-        if (!rows.length) return 0;
+        if (!rows.length) {
+            dispatch(olderTaken({chatId, rows, noOlder: true}));
+            return 0;
+        }
 
         // Canonical id||clientId dedup (model/historyCache); the page is ASC and older than the first row,
         // so the slice PREPENDS it and the rows stay chronological (the cursor above reads their order).
