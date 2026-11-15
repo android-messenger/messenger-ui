@@ -462,15 +462,15 @@ describe("story 3: what is not sent yet is not lost", () => {
             ack(b, alive, M1);
             expect(ids(b)).toEqual([gone]);                                      // the one behind it went through
 
-            for (let i = 0; i < 10 && b.queue()[0]?.status !== "failed"; i++) {
-                now += 7_000;                                                    // longer than the wait for a confirmation
-                await b.store.dispatch(b.m.flush.flushOutbox());
-            }
-            expect(b.queue().map((m) => m.status)).toEqual(["failed"]);
-            const before = b.socket.sent("CHAT_IN").length;
-            now += 7_000;
+            now += 18_000;
             await b.store.dispatch(b.m.flush.flushOutbox());
-            expect(b.socket.sent("CHAT_IN")).toHaveLength(before);               // given up: not sent again by itself
+            expect(b.queue().map((m) => m.status)).toEqual(["sending"]);         // still inside the wait for a confirmation
+            now += 2_000;
+            await b.store.dispatch(b.m.flush.flushOutbox());
+            expect(b.queue().map((m) => m.status)).toEqual(["failed"]);
+            now += 60_000;
+            await b.store.dispatch(b.m.flush.flushOutbox());
+            expect(sentIds(b)).toEqual([gone, alive]);                           // one frame each: never sent again by itself
 
             await send(b, "the next one");
             expect(sentIds(b).at(-1)).toBe(ids(b)[1]);

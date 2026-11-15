@@ -1,4 +1,5 @@
 import {useCallback, useState} from "react";
+import {useStore} from "react-redux";
 import toast from "react-hot-toast";
 import {useTranslation} from "react-i18next";
 
@@ -9,6 +10,8 @@ import {videoPosterBlob} from "@/features/chat/lib/videoPoster.ts";
 import {saveAttachmentBlob} from "@/features/chat/db/db.ts";
 import {files, isNativeApp} from "@/shared/platform.ts";
 import {listsReady, LISTS_NOT_READY_KEY} from "@/features/chat/model/sealedLists.ts";
+import {selectRows} from "@/features/chat/model/slices/chatHistorySlice.ts";
+import type {RootState} from "@/store/store";
 import {
     useAttachmentUploadUrlMutation,
     useAttachmentConfirmMutation,
@@ -18,8 +21,12 @@ import {
 /**
  * Attachment lifecycle for the open conversation, split out of the useChat god-hook: two-phase
  * presigned upload (get URL → PUT with progress → confirm → reload history), download (open a fresh
- * presigned URL), and resolve (a presigned GET for inline image previews). Behavior is unchanged —
- * this is a cohesion extraction.
+ * presigned URL), and resolve (a presigned GET for inline image previews).
+ *
+ * The server makes the message when it takes the confirmation. If the answer to the confirmation is lost
+ * or is an error, the message may exist all the same: the history is read, and the error is shown only if
+ * no message with this attachment is in it (spec 003, FR-033) — the user is not asked to send again what
+ * is already sent.
  */
 export function useChatAttachments(
     selectedChatId: string | null,
@@ -30,6 +37,7 @@ export function useChatAttachments(
     const [uploadUrlMut] = useAttachmentUploadUrlMutation();
     const [confirmMut] = useAttachmentConfirmMutation();
     const [downloadUrlMut] = useAttachmentDownloadUrlMutation();
+    const store = useStore<RootState>();
 
     const sendAttachment = useCallback(async (original: File) => {
         if (!selectedChatId || !original) return;
@@ -65,7 +73,16 @@ export function useChatAttachments(
                 xhr.onerror = () => reject(new Error("upload network error"));
                 xhr.send(file);
             });
-            await confirmMut({chatId: selectedChatId, attachmentId: up.attachmentId}).unwrap();
+            let read: Promise<unknown> | null = null;
+            try {
+                await confirmMut({chatId: selectedChatId, attachmentId: up.attachmentId}).unwrap();
+            } catch (e) {
+                read = reloadChatHistory();
+                await read.catch(() => {});
+                const inHistory = selectRows(store.getState(), selectedChatId)?.some((m) => m.meta?.attachmentId === up.attachmentId);
+                if (!inHistory) throw e;
+                logger.info("attachment: the answer to the confirmation was lost, the message is in the history", {attachmentId: up.attachmentId});
+            }
             // Cache a first-frame poster from the LOCAL blob so the sender's just-sent video shows a real
             // thumbnail immediately (not a black 🎬 placeholder). Best-effort, off the send path.
             if (contentType.startsWith("video/")) {
@@ -73,7 +90,7 @@ export function useChatAttachments(
                     .then((poster) => { if (poster) return saveAttachmentBlob(up.attachmentId, poster); })
                     .catch(() => { /* best-effort poster */ });
             }
-            reloadChatHistory().catch(() => {});
+            if (!read) reloadChatHistory().catch(() => {});
             toast.success(t("chat.fileSent"));
         } catch (e) {
             logger.error("sendAttachment failed", e as Error);
@@ -81,7 +98,7 @@ export function useChatAttachments(
         } finally {
             setUploadProgress(null);
         }
-    }, [selectedChatId, uploadUrlMut, confirmMut, reloadChatHistory, t]);
+    }, [selectedChatId, uploadUrlMut, confirmMut, reloadChatHistory, store, t]);
 
     const downloadAttachment = useCallback(async (attachmentId: string, meta?: {fileName?: string; contentType?: string}) => {
         if (!selectedChatId || !attachmentId) return;
