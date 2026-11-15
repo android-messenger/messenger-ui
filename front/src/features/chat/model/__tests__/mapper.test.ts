@@ -1,5 +1,5 @@
 import {describe, it, expect, vi} from "vitest";
-import {wireToChatMessage, toOutboxMessage, toChatMessageView} from "../mapper";
+import {wireToChatMessage, toOutboxMessage, toChatMessageView, takenAt} from "../mapper";
 import type {WireMessage} from "../schema/wireMessage.schema.ts";
 import type {ChatMessage} from "../schema/domainChatMessage.schema.ts";
 
@@ -71,5 +71,13 @@ describe("toChatMessageView", () => {
         expect(toChatMessageView(base, "me").fromMe).toBe(true);
         expect(toChatMessageView(base, "other").fromMe).toBe(false);
         expect(toChatMessageView(base, "me").createdAt).toBe(1234);
+    });
+});
+
+describe("takenAt", () => {
+    it("the time the server took a message in is the time in its id; another id gives the fallback", () => {
+        expect(takenAt("0000000001" + "0".repeat(16), 5)).toBe(1);
+        expect(takenAt("nano-1", 5)).toBe(5);
+        expect(takenAt(undefined, undefined)).toBeUndefined();
     });
 });

@@ -1,3 +1,4 @@
+import {ulidTimeMs} from "@/shared/ulid/ulid.ts";
 import {describe, it, expect, vi, beforeEach, afterEach} from "vitest";
 
 // --- Mutable test doubles (hoisted so vi.mock factories can close over them) ---
@@ -196,13 +197,13 @@ describe("chatMiddleware — CHAT_ACK (outbox reconcile)", () => {
         expect(dispatched.some((a) => a.type === markSent.type && a.payload === CLIENT_ID)).toBe(true);
     });
 
-    it("reconciles the optimistic echo: swaps temp id → server ULID and stamps server time", () => {
+    it("reconciles the optimistic echo: swaps temp id → server ULID and stamps the time the server took it", () => {
         const {dispatched, run} = harness("c1");
         run(ack());
         const rows = rowsAfter(dispatched, [{id: CLIENT_ID, clientId: CLIENT_ID, createdAt: new Date(0)}]);
         expect(rows).toHaveLength(1);
         expect(rows[0].id).toBe(SERVER_ID);
-        expect(rows[0].createdAt.getTime()).toBe(1_700_000_123_000);
+        expect(rows[0].createdAt.getTime()).toBe(ulidTimeMs(SERVER_ID));   // the time the server took it: the one in its id
     });
 
     it("ignores a CHAT_ACK with no correlationId", () => {
