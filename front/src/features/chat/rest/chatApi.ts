@@ -43,11 +43,13 @@ export const chatApi = createApi({
             providesTags: ["Chats"],
         }),
 
-        // The chat's newest message only — for the "unread" mark (spec 002 §3.2). Never cached.
-        getLastMessage: builder.query<ChatMessage | null, { chatId: string }>({
+        // The chat's newest message only — for the "unread" mark (spec 002 §3.2). A GET declared as a
+        // "mutation", as getHistoryPage below: the answer is handed to the caller and kept nowhere. As a
+        // query, a request made while the previous connection's request for the same chat was still on
+        // its way was not sent at all.
+        getLastMessage: builder.mutation<ChatMessage | null, { chatId: string }>({
             query: ({chatId}) => `/chats/${chatId}/messages?limit=1`,
             transformResponse: (response: unknown): ChatMessage | null => toMessages(response).at(-1) ?? null,
-            keepUnusedDataFor: 0,
         }),
 
         // The newest page of the chat's history as the server gave it (backend default = latest `limit`,

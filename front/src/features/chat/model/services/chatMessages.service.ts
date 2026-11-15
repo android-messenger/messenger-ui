@@ -1,5 +1,5 @@
 import {chatsToProbe, inBatches, isUnread, UNREAD_PROBE_PARALLEL} from "@/features/chat/model/unreadProbe.ts";
-import {chatCleared, echoPut, historyStale, rowFixed} from "@/features/chat/model/slices/chatHistorySlice.ts";
+import {chatCleared, echoPut, historyStale, liveEpoch, rowFixed} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {readHistory} from "@/features/chat/thunk/readHistory.ts";
 import {markChatUnread} from "@/features/chat/model/slices/chatUiSlice.ts";
 import {type AppDispatch, type RootState} from "@/store/store";
@@ -50,25 +50,34 @@ export const chatMessagesService = {
     /**
      * Spec 002 §3.2: after the chat list is fresh, ask each direct chat for its newest message and mark the
      * chat unread if that message is not mine and is newer than my read position. Such a chat is also
-     * stale: it is read again when opened. The chat on screen is not asked — it is read in full anyway.
+     * stale: it is read again when opened. The chat on screen is not asked — it is read in full anyway —
+     * and gets no mark if the user has opened it by the time its answer comes (FR-041). The check belongs
+     * to the connection it started under: once the socket has changed it asks and marks nothing more, the
+     * new connection runs its own (FR-042).
      */
     async probeUnread(dispatch: AppDispatch, getState: () => RootState) {
         const state = getState();
         const myId = state.user?.id;
         if (!myId) return;
         const chats = chatApi.endpoints.getChats.select({myId})(state)?.data ?? [];
-        const onScreen = typeof document !== "undefined" && document.hidden ? null : state.chatUi?.selectedChatId ?? null;
-        const asked = chatsToProbe(chats, onScreen);
+        /** The chat the user is looking at now: selected, and the page is on the screen. */
+        const onScreen = () => (typeof document !== "undefined" && document.hidden ? null : getState().chatUi?.selectedChatId ?? null);
+        const under = liveEpoch(state.ws);
+        const ended = () => liveEpoch(getState().ws) !== under;
+        const asked = chatsToProbe(chats, onScreen());
         let marked = 0;
         await inBatches(asked, UNREAD_PROBE_PARALLEL, async (chat) => {
+            if (ended()) return;
             const last = await dispatch(chatApi.endpoints.getLastMessage.initiate(
-                {chatId: chat.conversationId}, {forceRefetch: true, subscribe: false})).unwrap();
+                {chatId: chat.conversationId}, {track: false})).unwrap();
+            if (ended()) return;
             if (!isUnread(last ?? undefined, myId, chat.myReadId)) return;
-            if (!getState().chatUi?.unreadByChat?.[chat.conversationId]) marked++;
             dispatch(historyStale({chatId: chat.conversationId}));
+            if (chat.conversationId === onScreen()) return;   // opened meanwhile: stale, so it is read; no mark
+            if (!getState().chatUi?.unreadByChat?.[chat.conversationId]) marked++;
             dispatch(markChatUnread(chat.conversationId));
         });
-        logger.info("sync: unread asked", {chats: asked.length, marked});
+        logger.info("sync: unread asked", {chats: asked.length, marked, ended: ended()});
     },
     async clearChatHistory(dispatch: AppDispatch,
                            deleteHistory: ReturnType<typeof chatApi.useDeleteChatHistoryMutation>[0],

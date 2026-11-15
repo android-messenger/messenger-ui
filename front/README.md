@@ -23,7 +23,7 @@ npm run build:app   # сборка для приложения
 |---|---|
 | сервер | `b.server.history(chat).answer(rows)`, `.fail()`, `.status(401)`, `.always(rows)`; `b.server.chats(rows)`; `b.server.reply(method, path, answer)`; `b.server.expireSession()` |
 | сокет | `b.socket.connect()`, `.frame(кадр)`, `.drop()`, `.sent("CHAT_ACK")` |
-| приложение Android | `bench({app: true})`; `b.app.lock()`, `.unlock()`, `.notify("silent")`, `.notified()`, `.emit("appBackground")`, `.refuseEncrypt("no_device")` — библиотека отказывает шифровать |
+| приложение Android | `bench({app: true})`; `b.app.lock()`, `.unlock()`, `.notify("silent")`, `.notified()`, `.emit("appBackground")`, `.refuseEncrypt("no_device")` — библиотека отказывает шифровать; `.decrypted()` — что библиотеку просили расшифровать (секретное сообщение — `row({…, body: sealed("текст")})`) |
 | страница | `b.page.hide()`, `b.page.show()`, `b.page.leave()` — страницу закрывают |
 | проверка сессии | `b.signIn(id)` — те же шаги, что в `RequireAuth`; ждёт, пока очередь отправки прочитана с диска (`b.signIn(id, id, {settled: false})` — не ждёт) |
 

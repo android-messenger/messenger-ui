@@ -46,6 +46,9 @@ const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
 
 /** A message as the server sends it: a CHAT_OUT frame and a row of the history. */
+/** The body of a secret message as the app's library of the bench makes it. */
+export const sealed = (text: string) => "E2EE2:" + btoa(unescape(encodeURIComponent(text)));
+
 export function row(o: {id: string; chat: string; from: string; to: string; body: string; clientId?: string; at?: number}) {
     return {
         type: "CHAT_OUT", messageId: o.id, conversationId: o.chat, senderId: o.from, recipientId: o.to,
@@ -101,6 +104,8 @@ interface World {
     vaultLocked: boolean;
     notify: NotifyMode;
     notified: Frame[];
+    /** The envelopes the app's library was asked to decrypt, in order. */
+    decrypted: string[];
     /** Why the app's library refuses to encrypt a secret message; null — it encrypts. */
     refusal: string | null;
     appListeners: Map<string, Set<() => void>>;
@@ -261,7 +266,15 @@ function installApp(w: World): void {
     Object.assign(app.plugin, {
         e2eeEncrypt: async ({text}: {text: string}) => {
             if (w.refusal) throw Object.assign(new Error(w.refusal), {code: w.refusal});
-            return {envelope: "E2EE2:" + btoa(unescape(encodeURIComponent(text)))};
+            return {envelope: sealed(text)};
+        },
+        // A message key is spent by the first decryption: the same envelope again is refused, as the
+        // library's ratchet refuses it.
+        e2eeDecrypt: async ({envelope}: {envelope: string}) => {
+            const again = w.decrypted.includes(envelope);
+            w.decrypted.push(envelope);
+            if (again) throw Object.assign(new Error("duplicate"), {code: "duplicate"});
+            return {text: decodeURIComponent(escape(atob(envelope.replace(/^E2EE2:/, ""))))};
         },
         e2eePeerState: async () => ({trust: "unverified", keyChanged: false}),
     });
@@ -316,7 +329,7 @@ export async function bench(opts: BenchOptions = {}): Promise<Bench> {
     world = {
         isApp: !!opts.app, session: null, unauthorized: false, chats: [], always: new Map(), replies: [],
         requests: [], frames: [], connections: 0, vaultLocked: !!opts.vaultLocked, notify: "answers",
-        notified: [], refusal: null, appListeners: new Map(), errors: [],
+        notified: [], decrypted: [], refusal: null, appListeners: new Map(), errors: [],
     };
     vi.stubGlobal("indexedDB", new IDBFactory());   // an empty disk
     localStorage.clear();
@@ -462,6 +475,8 @@ function assemble(w: World, mine: Run, m: Modules, store: ReturnType<Modules["st
             refuseEncrypt(code: string | null) { w.refusal = code; },
             /** The messages the interface told the app about. */
             notified: () => [...w.notified],
+            /** The envelopes the app's library was asked to decrypt, in order. */
+            decrypted: () => [...w.decrypted],
             /** An event of the app: appBackground, appForeground. */
             emit(event: string) { for (const cb of [...(w.appListeners.get(event) ?? [])]) cb(); },
         },
