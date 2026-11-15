@@ -33,6 +33,7 @@ vi.mock("@/features/e2ee", () => ({
     secretAvailable: () => h.inApp,
     savePlaintext: h.savePlaintext, loadPlaintext: h.loadPlaintext, E2EE_PLAINTEXT_TTL_MS: 172_800_000,
     reportUndecryptable: h.reportUndecryptable,
+    inPeerOrder: (_peer: string, job: () => Promise<unknown>) => job(),   // the real one is tested on the bench (5.6)
 }));
 // wire.ts (the marker, failure.ts) is the REAL module (pure) — the classify/recoverable logic under test.
 
@@ -48,7 +49,7 @@ function harness(selectedChatId: string | null) {
     const dispatched: Dispatched[] = [];
     const store = {
         dispatch: vi.fn((a: Dispatched) => { dispatched.push(a); return a; }),
-        getState: vi.fn(() => ({user: {id: "me"}, chatUi: {selectedChatId}})),
+        getState: vi.fn(() => ({user: {id: "me"}, chatUi: {selectedChatId}, chatHistory: {byChat: {}}})),
     };
     const next = vi.fn((a) => a);
     const run = (frame: unknown) => chatMiddleware(store as never)(next as never)({type: "ws/incoming", payload: frame});

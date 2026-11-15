@@ -13,7 +13,6 @@ import {NotificationPrompt} from "@/features/notifications";
 import ConfirmModal from "@/shared/ui/ConfirmModal.jsx";
 import VideoCall from "@/features/call/ui/VideoCall.tsx";
 import {useChat} from "@/features/chat/hooks";
-import {useOutboxRetry} from "@/features/chat/hooks/useOutboxRetry.ts";
 import {useCallTimeout} from "@/features/call/hooks/useCallTimeout.ts";
 import {useCallRingtone} from "@/features/call/hooks/useCallRingtone.ts";
 import {LightboxProvider} from "@/features/chat/ui/Lightbox.tsx";
@@ -35,8 +34,6 @@ export default function Messenger() {
     const dispatch = useDispatch<AppDispatch>();
     const {t} = useTranslation();
 
-    // Periodic outbox retry driver (ACK-timeout resend).
-    useOutboxRetry();
     // End an unanswered outgoing call after a timeout.
     useCallTimeout();
     // Ring while a call is incoming/dialing.

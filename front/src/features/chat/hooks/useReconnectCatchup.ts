@@ -7,20 +7,26 @@ import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {isStale, selectChatHistory} from "@/features/chat/model/slices/chatHistorySlice.ts";
 
+/** A failed read of the open chat is tried again after 2, 4, 8, … s, at most a minute apart (FR-040). */
+export const REREAD_FIRST_MS = 2_000;
+export const REREAD_MAX_MS = 60_000;
+
 /** The connection of the socket the "unread" marks were last asked under (spec 002 §3.2). */
 let unreadAskedUnder: number | null = null;
 /** Tests. */
 export function resetUnreadAsked(): void { unreadAskedUnder = null; }
 
 /**
- * Catch-up-after-a-gap logic, extracted from the useChat god-hook. Two independent triggers refresh
- * the chat list + the open chat's history so nothing that arrived while we were away is missed:
+ * The catch-up after a gap, so nothing that arrived while we were away is missed. Runs once for the
+ * whole application (useDelivery).
  *
- *  1. wsStatus disconnected→connected TRANSITION (not every chat switch — the transition guard stops
- *     a refetch storm on plain chat opens): resend the outbox (idempotent) + refresh list + history.
- *  2. RESUME from background / network recovery (visibilitychange→visible, `online`), independent of
- *     the WS state — a backgrounded mobile PWA can resume with a socket that reports OPEN but is dead,
- *     so the transition trigger never re-fires; without this, missed messages only show after reload.
+ *  1. A new connection of the socket: the send queue goes out, the chat list and the "unread" marks
+ *     are asked — once per connection — and the open chat is read, because it is stale.
+ *  2. A read of the open chat that failed is tried again with a growing pause while the socket is
+ *     connected and the chat is open (FR-040).
+ *  3. Back on the screen or back on the network with a socket that says it is connected: the list and
+ *     the open chat are read over REST — a backgrounded page can come back with a socket that reports
+ *     OPEN but is dead. With the socket closed nothing is asked: its connection does step 1 (FR-046).
  *
  * All getChats refreshes go through refetchChatsPreservingSelected (the single funnel that keeps a
  * freshly-created, still-hidden selected chat from vanishing).
@@ -75,10 +81,33 @@ export function useReconnectCatchup(params: {
         Promise.resolve(reloadChatHistory()).catch(() => {});
     }, [selectedChatId, wsStatus, wsEpoch, reloadChatHistory, store]);
 
-    // Catch up over REST on RESUME from background / network recovery — independent of the WS state.
+    // FR-040: the read of the open chat has failed — it is tried again after 2, 4, 8, … 60 s, while the
+    // socket is connected and the chat is open. A new connection and another chat start from 2 s.
+    const read = useSelector((state: RootState) => {
+        const chat = selectChatHistory(state, selectedChatId);
+        return !chat || chat.reading > 0 ? "reading" : chat.error ? "failed" : "done";
+    });
+    const failures = useRef(0);
+    useEffect(() => { failures.current = 0; }, [selectedChatId, wsEpoch]);
+    useEffect(() => {
+        if (read === "done") failures.current = 0;
+        if (!selectedChatId || wsStatus !== "connected" || read !== "failed") return;
+        // The effect above may have just started a read of this chat: then there is nothing to try again yet.
+        if ((selectChatHistory(store.getState(), selectedChatId)?.reading ?? 0) > 0) return;
+        const pause = Math.min(REREAD_FIRST_MS * 2 ** failures.current, REREAD_MAX_MS);
+        failures.current++;
+        logger.info("sync: history read failed, reading again", {chatId: selectedChatId, inMs: pause});
+        const timer = setTimeout(() => { Promise.resolve(reloadChatHistory()).catch(() => {}); }, pause);
+        return () => clearTimeout(timer);
+    }, [read, selectedChatId, wsStatus, wsEpoch, reloadChatHistory, store]);
+
+    // Catch up over REST on RESUME from background / network recovery, when the socket says it is
+    // connected. A closed socket is being connected (useWebSocketConnection): the list and the chat are
+    // read once, under the new connection, by the effects above.
     useEffect(() => {
         const onResume = () => {
             if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+            if (store.getState().ws.status !== "connected") return;
             catchUpChats();
             if (selectedChatId) Promise.resolve(reloadChatHistory()).catch(() => {});
         };
@@ -88,5 +117,5 @@ export function useReconnectCatchup(params: {
             document.removeEventListener("visibilitychange", onResume);
             window.removeEventListener("online", onResume);
         };
-    }, [selectedChatId, reloadChatHistory, catchUpChats]);
+    }, [selectedChatId, reloadChatHistory, catchUpChats, store]);
 }

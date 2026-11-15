@@ -366,7 +366,7 @@ describe("story 4: one message is one row and one notification", () => {
             b.page.hide();                                                       // a chat never opened, the app is not on the screen
             for (const id of [S1, S2, S3]) b.socket.frame(copy(id));
             expect(b.app.notified().map((n) => [n.messageId, n.hidden])).toEqual([[S1, true], [S2, false], [S3, false]]);
-            expect(b.socket.sent("CHAT_ACK")).toHaveLength(3);
+            await b.until(() => b.socket.sent("CHAT_ACK").length === 3, "the three confirmations");   // after the app's answers
         });
 
         it("the same copy delivered again (its acknowledgement was lost) is not taken for another one", async () => {

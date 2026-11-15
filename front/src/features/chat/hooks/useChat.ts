@@ -11,7 +11,6 @@ import {useChatMessages} from "./useChatMessages";
 import {useChatAttachments} from "./useChatAttachments";
 import {useUnreadChats} from "./useUnreadChats";
 import {useReadReceipts} from "./useReadReceipts";
-import {useReconnectCatchup} from "./useReconnectCatchup";
 import {useOutboxStatus} from "./useOutboxStatus";
 import {useChatModeration} from "./useChatModeration";
 import {useMessageComposer} from "./useMessageComposer";
@@ -120,9 +119,8 @@ export function useChat() {
     // Incoming CHAT_OUT / CHAT_ACK / READ_OUT / TYPING_OUT are handled per-frame in chatMiddleware
     // (not a lastIncoming effect), so bursts of frames are never dropped.
 
-    // Reconnect / resume catch-up (refresh list + open history on ws reconnect and on resume from
-    // background) lives in its own hook.
-    useReconnectCatchup({selectedChatId, reloadChatHistory});
+    // The catch-up after a gap and the send queue's timer run once for the whole application
+    // (useDelivery, mounted in app/App.tsx), not here.
 
     // Read-receipt (READ_IN) machinery lives in its own hook (boundary reader + the visible/connect/
     // newest triggers). It hands back the boundary reader and a sender for openChat.

@@ -12,7 +12,7 @@ import {markSent, markFailed} from "@/features/chat/model/slices/outboxSlice.ts"
 import {logger} from "@/shared/logger/logger.ts";
 import {playNotificationSound} from "@/shared/sound/notify.ts";
 import {showDesktopNotification} from "@/features/notifications";
-import {secretCrypto, secretAvailable, reportUndecryptable, savePlaintext, loadPlaintext, E2EE_PLAINTEXT_TTL_MS} from "@/features/e2ee";
+import {secretCrypto, secretAvailable, reportUndecryptable, savePlaintext, loadPlaintext, inPeerOrder, E2EE_PLAINTEXT_TTL_MS} from "@/features/e2ee";
 import {isSecretEnvelope, classifyDecryptError, isRecoverable, isWrongDevice, secretStateKey, buildRekeyHint, makeThrottle, REKEY_COALESCE_MS} from "@/features/e2ee/wire.ts";
 import {ulidTimeMs, isUlid} from "@/shared/ulid/ulid.ts";
 import i18n from "@/shared/i18n";
@@ -22,6 +22,18 @@ import {markSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
 
 // How long a "peer is typing" indicator lingers before auto-clearing if no follow-up frame.
 const TYPING_TIMEOUT_MS = 4000;
+
+// Android app: how long the app may take to answer `notifyMessage` before the message is left
+// unacknowledged (spec 003, FR-043).
+export const NOTIFY_ANSWER_LIMIT_MS = 2_000;
+
+/** True once the app has taken the message; false if it refused or did not answer within the limit. */
+function takenByApp(told: Promise<unknown>): Promise<boolean> {
+    return new Promise((resolve) => {
+        const limit = setTimeout(() => resolve(false), NOTIFY_ANSWER_LIMIT_MS);
+        told.then(() => { clearTimeout(limit); resolve(true); }, () => { clearTimeout(limit); resolve(false); });
+    });
+}
 
 // Coalesce rekey hints: at most one per peer per window, however many mis-addressed envelopes arrive.
 const rekeyHintThrottle = makeThrottle(REKEY_COALESCE_MS);
@@ -37,6 +49,16 @@ const rekeyHintThrottle = makeThrottle(REKEY_COALESCE_MS);
 async function flagIfNotSaved(dispatch: AppDispatch, chatId: string, id: string, saved: Promise<boolean>): Promise<void> {
     if (await saved) return;
     dispatch(rowFixed({chatId, id, fix: {unsaved: true}}));
+}
+
+/** The text of this message is on the screen and nowhere else: it could not be stored (flagIfNotSaved). */
+function heldInMemory(state: RootState, chatId: string, id: string): boolean {
+    return !!selectRows(state, chatId)?.some((r) => r.id === id && r.unsaved);
+}
+
+/** The stored text of a secret message — under its server id or the sender's client id. */
+async function storedText(id: string, clientId: string | undefined): Promise<string | null> {
+    return (await loadPlaintext(id, E2EE_PLAINTEXT_TTL_MS)) ?? (clientId ? await loadPlaintext(clientId, E2EE_PLAINTEXT_TTL_MS) : null);
 }
 
 /**
@@ -76,30 +98,43 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                 const toRecover: Array<{clientId: string; serverId: string}> = [];
                 let peerId = "";
                 for (const m of secret) {
-                    let plain = (await loadPlaintext(m.id, E2EE_PLAINTEXT_TTL_MS)) ?? (m.clientId ? await loadPlaintext(m.clientId, E2EE_PLAINTEXT_TTL_MS) : null);
                     // "Aged out": older than the retention window → the plaintext (ours and the sender's) is
                     // swept by design. This is a disappearing message, NOT a decrypt failure — don't attempt
                     // recovery (the sender's copy is gone too), and show "expired", not "lost".
-                    const aged = plain == null && isUlid(m.id) && Date.now() - ulidTimeMs(m.id) > E2EE_PLAINTEXT_TTL_MS;
-                    let recoverable = false;
-                    if (plain == null && !aged && m.from && m.from !== myId && secretAvailable()) {
+                    const old = isUlid(m.id) && Date.now() - ulidTimeMs(m.id) > E2EE_PLAINTEXT_TTL_MS;
+                    const from = m.from;
+                    const read = async (): Promise<{plain: string | null; recoverable?: boolean; inMemory?: boolean}> => {
+                        const plain = await storedText(m.id, m.clientId);
+                        if (plain != null || old || !from || from === myId || !secretAvailable()) return {plain};
+                        // The socket's branch decrypted it, and the text could not be stored: the row has it.
+                        if (heldInMemory(store.getState(), chatId, m.id)) return {plain: null, inMemory: true};
                         // Never decrypted live → try the ratchet now (in-order over history).
                         try {
-                            plain = await secretCrypto.decrypt(m.from, m.text);
-                            void flagIfNotSaved(d, chatId, m.id, savePlaintext(m.id, chatId, plain));
+                            const text = await secretCrypto.decrypt(from, m.text);
+                            await flagIfNotSaved(d, chatId, m.id, savePlaintext(m.id, chatId, text));
+                            return {plain: text};
                         }
                         catch (e) {
-                            // Permanent gap / lost ciphertext → hand off to client-to-client recovery (Step B),
-                            // correlated by the sender's client id. Show "⏳ re-requested" until it resolves/expires.
-                            if (m.clientId) { toRecover.push({clientId: m.clientId, serverId: m.id}); peerId = m.from; recoverable = true; }
                             // Mis-addressed to another of our devices (offline history only ever delivered it) →
                             // nudge the sender to re-resolve our roster, same as the live path, so future sends
                             // reach us without waiting out the 24h roster TTL. Coalesced per peer.
-                            if (m.from && isWrongDevice(classifyDecryptError(e)) && rekeyHintThrottle(m.from)) {
-                                d({type: "ws/send", payload: buildRekeyHint(m.from, chatId)});
+                            if (isWrongDevice(classifyDecryptError(e)) && rekeyHintThrottle(from)) {
+                                d({type: "ws/send", payload: buildRekeyHint(from, chatId)});
                             }
+                            // Permanent gap / lost ciphertext → hand off to client-to-client recovery (Step B),
+                            // correlated by the sender's client id. Show "⏳ re-requested" until it resolves/expires.
+                            if (!m.clientId) return {plain: null};
+                            toRecover.push({clientId: m.clientId, serverId: m.id});
+                            peerId = from;
+                            return {plain: null, recoverable: true};
                         }
-                    }
+                    };
+                    // A peer's message is looked up and decrypted in the peer's queue, one at a time with the
+                    // socket's branch (FR-045); my own cannot be decrypted here at all — the stored text only.
+                    const {plain, recoverable = false, inMemory = false} =
+                        from && from !== myId ? await inPeerOrder(from, read) : await read();
+                    if (inMemory) continue;
+                    const aged = plain == null && old;
                     // "lost" ONLY when we actually tried and failed within the window. Own messages we can't
                     // re-derive from history (the envelope is encrypted to the peer) → "unavailable".
                     const state = !secretAvailable() ? "appOnly"
@@ -158,22 +193,27 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             if (secretBody) {
                 const patch = (text: string) => dispatch(rowFixed({chatId, id: msg.id, fix: {text}}));
                 const cid = msg.clientId;
-                void (async () => {
+                const sender = frame.senderId ?? msg.from;
+                // In the sender's queue: one at a time with the history's branch and with the same frame
+                // sent again, so one message is decrypted once (FR-045).
+                void inPeerOrder(sender, async () => {
+                    // The same frame again, and the text of the first one could not be stored: the row has it.
+                    if (heldInMemory(store.getState() as RootState, chatId, msg.id)) return;
                     // Durable dedup FIRST: the Double Ratchet consumes each message key exactly once, so
                     // re-decrypting a redelivered ciphertext (lost-ACK resend, or live+history overlap) throws
                     // a dup-reject. If we already hold the plaintext — under this server id OR the sender's
                     // stable client id — reuse it and never touch the ratchet.
-                    const seen = (await loadPlaintext(msg.id, E2EE_PLAINTEXT_TTL_MS))
-                        ?? (cid ? await loadPlaintext(cid, E2EE_PLAINTEXT_TTL_MS) : null);
+                    const seen = await storedText(msg.id, cid);
                     if (seen != null) { patch(seen); return; }
                     // A browser has no keys: it shows where the message can be read and asks the sender for nothing.
                     if (!secretAvailable()) { patch(i18n.t(secretStateKey("appOnly"))); return; }
                     try {
-                        const plain = await secretCrypto.decrypt(frame.senderId ?? msg.from, secretBody);
+                        const plain = await secretCrypto.decrypt(sender, secretBody);
                         patch(plain);
-                        // for reloaded history (by server id); a failed save is shown on the bubble
-                        void flagIfNotSaved(dispatch, chatId, msg.id, savePlaintext(msg.id, chatId, plain));
                         if (cid) void savePlaintext(cid, chatId, plain);        // + by client id, so a resend dedups
+                        // for reloaded history (by server id); a failed save is shown on the bubble. The next
+                        // message of this sender waits for it: it must find this text, not decrypt again.
+                        await flagIfNotSaved(dispatch, chatId, msg.id, savePlaintext(msg.id, chatId, plain));
                     } catch (e) {
                         // A stored copy always wins. Otherwise classify: a recoverable gap (past MAX_SKIP, no
                         // session yet) is handed to client-to-client recovery NOW — the live path used to
@@ -181,21 +221,20 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                         // "⏳ re-requested"; a corrupt/undecodable frame is a plain "unavailable".
                         const stored = await loadPlaintext(msg.id);
                         if (stored != null) { patch(stored); return; }
-                        const peerId = frame.senderId ?? msg.from;
                         const failure = classifyDecryptError(e);
                         // Mis-addressed to another of our devices → nudge the sender to re-resolve our roster
                         // (metadata-only hint, coalesced per peer). The message itself is still recovered below.
-                        if (peerId && isWrongDevice(failure) && rekeyHintThrottle(peerId)) {
-                            dispatch({type: "ws/send", payload: buildRekeyHint(peerId, chatId)});
+                        if (sender && isWrongDevice(failure) && rekeyHintThrottle(sender)) {
+                            dispatch({type: "ws/send", payload: buildRekeyHint(sender, chatId)});
                         }
-                        if (cid && peerId && isRecoverable(failure)) {
+                        if (cid && sender && isRecoverable(failure)) {
                             patch(i18n.t(secretStateKey("pending")));
-                            dispatch(reportUndecryptable({chatId, peerId, items: [{clientId: cid, serverId: msg.id}]}) as never);
+                            dispatch(reportUndecryptable({chatId, peerId: sender, items: [{clientId: cid, serverId: msg.id}]}) as never);
                         } else {
                             patch(i18n.t(secretStateKey("unavailable")));
                         }
                     }
-                })();
+                });
             }
 
             // NOTE: we do NOT infer the peer's read state from an incoming message. Receiving a
@@ -227,19 +266,27 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             // BEFORE it is acknowledged. The app notes the message id, so a late push of the same message
             // shows nothing, and shows a notification itself when the user is not looking at the app (the
             // socket stays open for a moment after the app leaves the screen, and for the whole of a call).
-            // Not told in time — no ACK goes out, and the server sends it again or as a push.
+            // Not taken in time, or refused — no ACK goes out (FR-043), and the server sends it again or as
+            // a push. An app that has no such method (before 10191) is not asked: the ACK goes at once.
             const hidden = typeof document !== "undefined" && document.hidden;
+            // ACK delivery (SENT → DELIVERED; advances the server GC watermark).
+            const acknowledge = () => dispatch({type: "ws/send", payload: buildChatAck(frame)});
+            let told: Promise<unknown> | undefined;
             if (isNativeApp()) {
                 try {
-                    void push().notifyMessage({
+                    told = push().notifyMessage({
                         conversationId: chatId, messageId: frame.messageId ?? msg.id, senderId: frame.senderId,
                         hidden: !copy && (hidden || isAppBackgrounded()),
-                    }).catch((e) => logger.warn("push: the app did not take a socket message", e as Error));
+                    });
                 } catch (e) { logger.warn("push: no notifyMessage in this app", e as Error); }
             }
-
-            // ACK delivery (SENT → DELIVERED; advances the server GC watermark).
-            dispatch({type: "ws/send", payload: buildChatAck(frame)});
+            if (!told) acknowledge();
+            else {
+                void takenByApp(told).then((taken) => {
+                    if (taken) acknowledge();
+                    else logger.warn("push: the app did not take a socket message, it is not acknowledged", {chatId, messageId: frame.messageId ?? msg.id});
+                });
+            }
             clearTypingTimer(chatId);
             dispatch(setTyping({chatId, typing: false}));
 

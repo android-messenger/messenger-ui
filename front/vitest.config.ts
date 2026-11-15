@@ -56,6 +56,7 @@ export const MESSAGE_PATH = [
     "src/features/chat/model/drafts.ts",
     "src/features/chat/model/slices/outboxSlice.ts",
     "src/features/chat/model/slices/chatUiSlice.ts",
+    "src/features/chat/hooks/useDelivery.ts",
     "src/features/chat/hooks/useReconnectCatchup.ts",
     "src/features/chat/hooks/useOutboxRetry.ts",
     "src/features/chat/hooks/useOutboxStatus.ts",
@@ -64,6 +65,7 @@ export const MESSAGE_PATH = [
     "src/features/chat/hooks/useChatAttachments.ts",
     "src/features/chat/hooks/useReadReceipts.ts",
     "src/features/chat/hooks/useWindowedHistory.ts",
+    "src/features/e2ee/lib/peerOrder.ts",
     "src/features/chat/db/db.ts",
     "src/features/chat/db/sealed.ts",
     "src/store/store.ts",
@@ -89,7 +91,7 @@ export default defineConfig({
             // The check fails below these (FR-004). They are what the tests reach today, rounded down, and
             // only go up: every pull request of spec 003 raises them to what it reaches, and T376 sets the
             // target — lines 90, branches 80. Lowering a number to get a green check is not allowed.
-            thresholds: {lines: 90, branches: 80},
+            thresholds: {lines: 91, branches: 82},
         },
     },
 });

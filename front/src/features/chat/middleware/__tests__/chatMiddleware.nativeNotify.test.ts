@@ -50,10 +50,18 @@ describe("chatMiddleware — a socket message in the Android app", () => {
         setHidden(false);
     });
 
-    it("is told to the app with its server id, and only then acknowledged", () => {
+    it("is told to the app with its server id, and acknowledged only after the app has answered", async () => {
         run("c1");
         expect(app.notify).toHaveBeenCalledWith({conversationId: "c1", messageId: SERVER_ID, senderId: "peer", hidden: false});
-        expect(app.order).toEqual(["told", "ack"]);
+        expect(app.order).toEqual(["told"]);
+        await vi.waitFor(() => expect(app.order).toEqual(["told", "ack"]));
+    });
+
+    it("is not acknowledged when the app refuses it", async () => {
+        app.notify = vi.fn(async () => { throw new Error("refused"); });
+        run("c1");
+        await new Promise((r) => setTimeout(r, 20));
+        expect(app.order).toEqual([]);
     });
 
     it("says the user is not looking when the page is hidden or the app has gone to the background", () => {

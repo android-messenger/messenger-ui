@@ -7,6 +7,7 @@ import {AppToaster} from "./AppToaster.tsx";
 import type {RootState} from "@/store/store.ts";
 import {RequireAuth} from "@/features/auth/ui/RequireAuth.tsx";
 import {useWebSocketConnection} from "@/infrastructure/hooks/useWebSocketConnection.ts";
+import {useDelivery} from "@/features/chat/hooks/useDelivery.ts";
 import {markInitialized} from "@/features/auth";
 import {isNotLogged} from "@/shared/utils/checks.ts";
 import {ErrorBoundary} from "@/shared/ui/ErrorBoundary.tsx";
@@ -31,6 +32,12 @@ const NativeAppBridge = lazy(() => import("@/infrastructure/native/NativeAppBrid
 
 function Fallback() {
     return <div className="min-h-dvh flex items-center justify-center bg-gray-200 text-gray-500">…</div>;
+}
+
+/** Delivery runs for a signed-in user, on every page (spec 003, FR-044). */
+function Delivery() {
+    useDelivery();
+    return null;
 }
 
 function App() {
@@ -63,6 +70,7 @@ function App() {
 
     return (
         <ErrorBoundary>
+            {!isNotLogged(userId) && <Delivery/>}
             <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, "")}>
                 {isNativeApp() && <Suspense fallback={null}><NativeAppBridge/></Suspense>}
                 <Suspense fallback={<Fallback/>}>
