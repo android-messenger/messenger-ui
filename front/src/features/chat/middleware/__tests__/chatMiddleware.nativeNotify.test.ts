@@ -57,6 +57,12 @@ describe("chatMiddleware — a socket message in the Android app", () => {
         await vi.waitFor(() => expect(app.order).toEqual(["told", "ack"]));
     });
 
+    it("is acknowledged when the bridge says the app has no such method", async () => {
+        app.notify = vi.fn(async () => { throw Object.assign(new Error("not implemented"), {code: "UNIMPLEMENTED"}); });
+        run("c1");
+        await vi.waitFor(() => expect(app.order).toEqual(["ack"]));
+    });
+
     it("is not acknowledged when the app refuses it", async () => {
         app.notify = vi.fn(async () => { throw new Error("refused"); });
         run("c1");

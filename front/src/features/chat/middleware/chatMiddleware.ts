@@ -27,11 +27,18 @@ const TYPING_TIMEOUT_MS = 4000;
 // unacknowledged (spec 003, FR-043).
 export const NOTIFY_ANSWER_LIMIT_MS = 2_000;
 
-/** True once the app has taken the message; false if it refused or did not answer within the limit. */
+/**
+ * True once the app has taken the message; false if it refused or did not answer within the limit. An app
+ * that has no such method is not a refusal: the bridge either has no function to call (handled by the
+ * caller) or answers UNIMPLEMENTED — the message is acknowledged as before the method existed.
+ */
 function takenByApp(told: Promise<unknown>): Promise<boolean> {
     return new Promise((resolve) => {
         const limit = setTimeout(() => resolve(false), NOTIFY_ANSWER_LIMIT_MS);
-        told.then(() => { clearTimeout(limit); resolve(true); }, () => { clearTimeout(limit); resolve(false); });
+        told.then(
+            () => { clearTimeout(limit); resolve(true); },
+            (e: unknown) => { clearTimeout(limit); resolve((e as {code?: string} | null)?.code === "UNIMPLEMENTED"); },
+        );
     });
 }
 
