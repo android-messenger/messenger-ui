@@ -1,4 +1,4 @@
-import type {AppDispatch} from "./store.ts";
+import {dropOutbox, type AppDispatch} from "./store.ts";
 import {clearUser} from "@/features/auth/slices/userSlice.ts";
 import {chatApi} from "@/features/chat/rest/chatApi.ts";
 import {contactsApi} from "@/features/contacts/rest/contactsApi.ts";
@@ -10,8 +10,8 @@ import {historyForgotten} from "@/features/chat/model/slices/chatHistorySlice.ts
 
 /**
  * Full client-state teardown on logout, orchestrated at the composition root (store) — the ONE layer
- * allowed to reach across features. Disconnects the WS, resets the user (which cascades to the outbox /
- * chatUi / presence slices) and every RTK Query cache, and wipes on-disk data (IndexedDB history/outbox/
+ * allowed to reach across features. Disconnects the WS, resets the user (which cascades to the
+ * chatUi / presence slices), empties the send queue and every RTK Query cache, and wipes on-disk data (IndexedDB history/outbox/
  * media + localStorage drafts) so the next user on this device inherits nothing. The E2EE keys and the
  * stored secret messages are erased right after this by fullLogout (wipeE2eeData).
  *
@@ -21,6 +21,7 @@ import {historyForgotten} from "@/features/chat/model/slices/chatHistorySlice.ts
 export const logoutResetClientState = () => (dispatch: AppDispatch) => {
     dispatch({type: "ws/disconnect"});
     dispatch(clearUser());
+    dispatch(dropOutbox());
     dispatch(clearSecretChats());
     dispatch(historyForgotten());
     dispatch(chatApi.util.resetApiState());

@@ -1,5 +1,5 @@
 import {describe, it, expect} from "vitest";
-import reducer, {enqueueMessage, markSent, markFailed, retryMessage} from "../outboxSlice";
+import reducer, {enqueueMessage, markSent, markFailed, retryMessage, mergeOutbox, clearOutbox} from "../outboxSlice";
 import {clearUser} from "@/features/auth/slices/userSlice";
 import type {WireMessage} from "@/features/chat/model/schema/wireMessage.schema";
 
@@ -34,13 +34,44 @@ describe("outboxSlice", () => {
         expect(s.messages[0]).toMatchObject({status: "pending", attempts: 0});
     });
 
-    it("clears the queue on logout so it can't be re-flushed under the next user", () => {
+    // Spec 003, FR-020: the end of a session (a 401 → clearUser) is not a sign-out.
+    it("the end of a session leaves the queue as it is", () => {
+        let s = reducer(init(), enqueue("m1"));
+        s = reducer(s, mergeOutbox(null));
+        const before = s;
+        s = reducer(s, clearUser());
+        expect(s).toBe(before);
+    });
+
+    it("clearOutbox (sign-out, another account) empties the queue; it is read from the disk again", () => {
         let s = reducer(init(), enqueue("m1"));
         s = reducer(s, enqueue("m2"));
+        s = reducer(s, mergeOutbox(null));
         const v = s.outboxVersion;
-        s = reducer(s, clearUser());
+        s = reducer(s, clearOutbox());
         expect(s.messages).toHaveLength(0);
-        // version bumped so the debounced persister overwrites the on-disk copy with the empty queue
+        expect(s.restored).toBe(false);
         expect(s.outboxVersion).not.toBe(v);
+    });
+
+    it("mergeOutbox puts the stored messages first, keeps what was queued meanwhile, takes none twice", () => {
+        let s = reducer(init(), enqueue("fresh"));
+        expect(s.restored).toBe(false);
+        const stored = reducer(reducer(init(), enqueue("old1")), enqueue("old2"));
+        s = reducer(s, mergeOutbox(stored));
+        expect(s.messages.map((m) => m.id)).toEqual(["old1", "old2", "fresh"]);
+        expect(s.restored).toBe(true);
+        const v = s.outboxVersion;
+        s = reducer(s, mergeOutbox(stored));
+        expect(s.messages.map((m) => m.id)).toEqual(["old1", "old2", "fresh"]);
+        expect(s.outboxVersion).toBe(v);
+    });
+
+    it("mergeOutbox with nothing stored only marks the queue as read", () => {
+        let s = reducer(init(), enqueue("fresh"));
+        const v = s.outboxVersion;
+        s = reducer(s, mergeOutbox(null));
+        expect(s).toMatchObject({restored: true, outboxVersion: v});
+        expect(s.messages.map((m) => m.id)).toEqual(["fresh"]);
     });
 });

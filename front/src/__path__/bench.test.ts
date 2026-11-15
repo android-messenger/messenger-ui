@@ -63,6 +63,8 @@ describe("1.1: the bench plays the server, the socket and the app; everything el
         expect(b.store).not.toBe(first.store);
         expect(b.m.read).not.toBe(first.m.read);                          // module state starts empty
         expect(b.store.getState().user.id).not.toBe(MY);                  // nobody is signed in yet
+        expect(b.queue()).toEqual([]);                                    // and the queue is not read before that
+        await b.signIn(MY);
         expect(b.queue().map((m) => m.payload.payload?.body)).toEqual(["queued"]);
     });
 
@@ -86,8 +88,11 @@ describe("1.1: the bench plays the server, the socket and the app; everything el
         const b = await first.restart();
         expect(b.m.lists.listsReady()).toBe(false);                       // nothing is sent or written yet
         expect(b.queue()).toEqual([]);
+        await b.signIn(MY, MY, {settled: false});
+        await b.settle(100);
+        expect(b.queue()).toEqual([]);                                    // signed in, the phone still locked
         b.app.unlock();
-        await b.until(() => b.m.lists.listsReady(), "the lists");
+        await b.until(() => b.m.lists.listsReady() && b.store.getState().outbox.restored, "the lists and the queue");
         expect(b.queue().map((m) => m.payload.payload?.body)).toEqual(["queued"]);
     });
 

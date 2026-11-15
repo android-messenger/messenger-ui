@@ -56,7 +56,7 @@ export function row(o: {id: string; chat: string; from: string; to: string; body
 
 /** The application's modules a test reaches for. Loaded after the module registry is reset. */
 async function load() {
-    const [store, logout, api, groups, service, mapper, outbox, chatUi, ws, history, read, older, db, lists, drafts, user, session, kratos, flush, config] =
+    const [store, logout, api, groups, service, mapper, outbox, chatUi, ws, history, read, older, db, lists, drafts, user, session, kratos, flush, config, secret] =
         await Promise.all([
             import("@/store/store"),
             import("@/store/logout"),
@@ -78,8 +78,9 @@ async function load() {
             import("@/features/auth/model/services/kratos"),
             import("@/features/chat/thunk/sendOutboxThunk"),
             import("@/shared/config/api"),
+            import("@/features/chat/model/slices/secretChatsSlice"),
         ]);
-    return {store, logout, api, groups, service, mapper, outbox, chatUi, ws, history, read, older, db, lists, drafts, user, session, kratos, flush, config};
+    return {store, logout, api, groups, service, mapper, outbox, chatUi, ws, history, read, older, db, lists, drafts, user, session, kratos, flush, config, secret};
 }
 export type Modules = Awaited<ReturnType<typeof load>>;
 
@@ -100,6 +101,8 @@ interface World {
     vaultLocked: boolean;
     notify: NotifyMode;
     notified: Frame[];
+    /** Why the app's library refuses to encrypt a secret message; null — it encrypts. */
+    refusal: string | null;
     appListeners: Map<string, Set<() => void>>;
     errors: string[];
 }
@@ -254,6 +257,14 @@ function installApp(w: World): void {
             return real(o);
         }) as never);
     }
+    // Secret chats: the app's library encrypts, or refuses with its reason (wolp-device-trust spec 002).
+    Object.assign(app.plugin, {
+        e2eeEncrypt: async ({text}: {text: string}) => {
+            if (w.refusal) throw Object.assign(new Error(w.refusal), {code: w.refusal});
+            return {envelope: "E2EE2:" + btoa(unescape(encodeURIComponent(text)))};
+        },
+        e2eePeerState: async () => ({trust: "unverified", keyChanged: false}),
+    });
     const notifyMessage = (o: Frame) => {
         w.notified.push(o);
         if (w.notify === "refuses") return Promise.reject(new Error("the app refused"));
@@ -305,7 +316,7 @@ export async function bench(opts: BenchOptions = {}): Promise<Bench> {
     world = {
         isApp: !!opts.app, session: null, unauthorized: false, chats: [], always: new Map(), replies: [],
         requests: [], frames: [], connections: 0, vaultLocked: !!opts.vaultLocked, notify: "answers",
-        notified: [], appListeners: new Map(), errors: [],
+        notified: [], refusal: null, appListeners: new Map(), errors: [],
     };
     vi.stubGlobal("indexedDB", new IDBFactory());   // an empty disk
     localStorage.clear();
@@ -364,12 +375,16 @@ function assemble(w: World, mine: Run, m: Modules, store: ReturnType<Modules["st
         /** For renderHook / render: the application's store around the component. */
         wrapper: ({children}: {children: ReactNode}) => createElement(Provider, {store, children}),
 
-        /** The session check finds `id` signed in — the same steps as RequireAuth. */
-        async signIn(id = "me", name = id): Promise<void> {
+        /**
+         * The session check finds `id` signed in — the same steps as RequireAuth. The send queue is read from
+         * the disk after that; `settled: false` — do not wait for it: the test acts while it is being read.
+         */
+        async signIn(id = "me", name = id, o: {settled?: boolean} = {}): Promise<void> {
             w.session = {id, name};
             w.unauthorized = false;
             const {data} = await m.kratos.kratos.toSession();
             await m.session.enterSession(store.dispatch, data.identity as {id: string});
+            if (o.settled !== false && !w.vaultLocked) await until(() => store.getState().outbox.restored === true, "the send queue to be read from the disk");
         },
 
         server: {
@@ -443,6 +458,8 @@ function assemble(w: World, mine: Run, m: Modules, store: ReturnType<Modules["st
             unlock() { w.vaultLocked = false; document.dispatchEvent(new Event("visibilitychange")); },
             /** How the app takes `notifyMessage`: answers (default), stays silent, refuses, or has no such method. */
             notify(mode: NotifyMode) { w.notify = mode; },
+            /** The app's library refuses to encrypt with this reason (no_device, no_network, …); null — it encrypts again. */
+            refuseEncrypt(code: string | null) { w.refusal = code; },
             /** The messages the interface told the app about. */
             notified: () => [...w.notified],
             /** An event of the app: appBackground, appForeground. */
@@ -452,6 +469,8 @@ function assemble(w: World, mine: Run, m: Modules, store: ReturnType<Modules["st
         page: {
             hide() { pageHidden(true); },
             show() { pageHidden(false); },
+            /** The page is being closed or put away (pagehide). */
+            leave() { window.dispatchEvent(new Event("pagehide")); },
         },
 
         /** The user opens the chat: it is selected and — as useChatMessages does — read if it has no rows. */

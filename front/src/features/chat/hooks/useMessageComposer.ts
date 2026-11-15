@@ -1,4 +1,4 @@
-import {useCallback, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {useDispatch, useSelector} from "react-redux";
 import toast from "react-hot-toast";
 import {useTranslation} from "react-i18next";
@@ -15,8 +15,9 @@ type ComposerSummary = {counterpartId: string; orderId?: string} | null | undefi
 /**
  * Message composer state + actions, extracted from useChat: the draft input, sending a message
  * (validate → enqueue via the outbox service → clear the input), and the throttled "I'm typing"
- * notifier. Behavior preserved verbatim, including the no-summary guard that surfaces an error toast
- * instead of failing silently.
+ * notifier. The input and the draft are cleared only AFTER the message is in the send queue: a refusal
+ * before that (the lists are not read, the chat cannot be resolved, the encryption failed) leaves the
+ * typed text where it is (spec 003, FR-023).
  */
 const EMPTY_SECRET: Record<string, boolean> = {};   // stable ref → no re-render churn when there are no secret chats
 
@@ -48,8 +49,14 @@ export function useMessageComposer(params: {
         if (selectedChatId) saveDraft(selectedChatId, text, {persist: !isSecretChat(selectedChatId)});
     }, [selectedChatId, isSecretChat]);
 
+    // The chat on the screen now, for what ends after an await.
+    const openChat = useRef(selectedChatId);
+    useEffect(() => { openChat.current = selectedChatId; }, [selectedChatId]);
+    // A message is on its way to the queue (being encrypted): a second press must not send it again.
+    const sending = useRef(false);
+
     const sendMessage = useCallback((text: string) => {
-        if (!selectedChatId || !text.trim()) return;
+        if (!selectedChatId || !text.trim() || sending.current) return;
         // Not sent before the list of secret chats is read (sealedLists.ts). The typed text stays in the field.
         if (!listsReady()) { toast.error(t(LISTS_NOT_READY_KEY)); return; }
         const summary = getSummary(selectedChatId);
@@ -60,12 +67,20 @@ export function useMessageComposer(params: {
             toast.error(t("chat.msgSendError", {defaultValue: "Couldn't send — reopen the chat"}));
             return;
         }
-        setMessageInputRaw("");
-        clearDraft(selectedChatId);
-        const secret = isSecretChat(selectedChatId);
+        const chatId = selectedChatId;
+        const secret = isSecretChat(chatId);
+        sending.current = true;
         void chatMessagesService.enqueueChatMessage(
-            dispatch, text, myId, selectedChatId, summary.counterpartId, summary.orderId, secret
-        );
+            dispatch, text, myId, chatId, summary.counterpartId, summary.orderId, secret
+        ).then((queued) => {
+            if (!queued) return;   // refused: the text stays in the field, the user was told why
+            // Queued. What the user has typed since (the encryption takes a moment) is not this message.
+            const same = (now: string) => now.trim() === text.trim();
+            if (same(loadDraft(chatId))) clearDraft(chatId);
+            if (openChat.current === chatId) setMessageInputRaw((now) => (same(now) ? "" : now));
+        }).catch((e) => {
+            logger.error("sendMessage: not queued", e as Error);
+        }).finally(() => { sending.current = false; });
         // A new message is naturally "not read yet": its createdAt is above the peer's read
         // watermark, so it renders ✓ until a READ_OUT advances the watermark past it. No global reset.
     }, [selectedChatId, getSummary, myId, dispatch, t, isSecretChat]);
@@ -85,8 +100,11 @@ export function useMessageComposer(params: {
         const secret = isSecretChat(targetChatId);
         void chatMessagesService.enqueueChatMessage(
             dispatch, text, myId, targetChatId, summary.counterpartId, summary.orderId, secret
-        );
-        toast.success(t("chat.forwarded", {defaultValue: "Forwarded"}));
+        ).then((queued) => {
+            if (queued) toast.success(t("chat.forwarded", {defaultValue: "Forwarded"}));
+        }).catch((e) => {
+            logger.error("forwardMessage: not queued", e as Error);
+        });
     }, [getSummary, myId, dispatch, t, isSecretChat]);
 
     // Throttled "I'm typing" notifier (TYPING_IN → peer's TYPING_OUT). Called on input change.

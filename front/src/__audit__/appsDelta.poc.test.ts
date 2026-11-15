@@ -14,13 +14,13 @@ const SECRET_TEXT = "meet at the usual place at nine";
 
 async function start() {
     vi.resetModules();
-    const {configureAppStore, hydrateStore, dropForeignCache} = await import("@/store/store");
+    const {configureAppStore, hydrateStore, dropForeignCache, restoreOutbox} = await import("@/store/store");
     const db = await import("@/features/chat/db/db");
     const drafts = await import("@/features/chat/model/drafts");
     const secret = await import("@/features/chat/model/slices/secretChatsSlice");
     const svc = await import("@/features/chat/model/services/chatMessages.service.ts");
     const lists = await import("@/features/chat/model/sealedLists.ts");
-    return {configureAppStore, hydrateStore, dropForeignCache, db, drafts, secret, svc, lists};
+    return {configureAppStore, hydrateStore, dropForeignCache, restoreOutbox, db, drafts, secret, svc, lists};
 }
 
 describe("apps-delta PoC", () => {
@@ -121,6 +121,7 @@ describe("apps-delta PoC", () => {
         app.plugin.vaultUnwrap.mockImplementation(failing("UNAVAILABLE"));
         const store = n.configureAppStore(webrtc);
         await n.hydrateStore(store);
+        void store.dispatch(n.restoreOutbox());                                // a user is signed in
         await new Promise((r) => setTimeout(r, 300));
         store.dispatch(n.secret.markSecret("c-new"));                          // e.g. a secret message arrived
         await new Promise((r) => setTimeout(r, 600));
@@ -130,7 +131,7 @@ describe("apps-delta PoC", () => {
 
         await vi.waitFor(() => expect(store.getState().secretChats.byId).toEqual({"c-a": true, "c-b": true, "c-new": true}), {timeout: 6000, interval: 100});
         await vi.waitFor(async () => expect(await n.db.kvGet(n.db.KV.secretChats)).toEqual({"c-a": true, "c-b": true, "c-new": true}), {timeout: 3000});
-        expect(store.getState().outbox.messages.map((x) => x.id)).toEqual(["stored"]);
+        await vi.waitFor(() => expect(store.getState().outbox.messages.map((x) => x.id)).toEqual(["stored"]), {timeout: 6000, interval: 100});
     }, 15_000);
 
     // ---- F3 (fixed, T109): a write that is at the Vault when the sign-out clears the cache does not land after it ----

@@ -13,9 +13,8 @@ import App from "./app/App.tsx";
 
 const store = configureAppStore(webRTCService);
 
-// Restore the persisted outbox from IndexedDB so queued/failed messages survive a page reload
-// (they are saved via store.subscribe but were never read back). Fire-and-forget: the queue
-// populates asynchronously and flushOutbox re-sends anything pending once the socket connects.
+// Start-up housekeeping of the disk and, in the Android app, the read of the sealed lists. Not waited for.
+// The send queue is read later, once a user is signed in (restoreOutbox, called by enterSession).
 hydrateStore(store);
 
 // PWA auto-update safety: when a new service worker takes control (autoUpdate → skipWaiting +
