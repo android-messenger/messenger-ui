@@ -19,6 +19,12 @@ const msg = (id: string, from: string, body: string, at?: number) => row({id, ch
 /** A row as the device's copy of the chat holds it. */
 const stored = (id: string, from: string, text: string): ChatMessage =>
     ({id, chatId: CHAT, from, to: from === MY ? PEER : MY, text, createdAt: new Date(T), status: "sent"});
+/** A server id made at the moment `ms`, as the server makes it when it takes a message in. */
+function idAt(ms: number): string {
+    let head = "";
+    for (let i = 0; i < 10; i++) { head = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"[ms % 32] + head; ms = Math.floor(ms / 32); }
+    return head + "0000000000000000";
+}
 /** A server id: they order as their numbers do. */
 const U = (n: number) => "01ARZ3NDEKTSV4RRFFQ6" + String(n).padStart(6, "0");
 const page = (from: number, to: number) => Array.from({length: to - from + 1}, (_, i) => msg(U(from + i), PEER, `m${from + i}`, T + from + i));
@@ -316,11 +322,12 @@ describe("the chat on the screen (useChatMessages)", () => {
         expect(view.result.current.loadingHistory).toBe(false);
         expect(view.result.current.messages.map((m) => [m.id, m.fromMe])).toEqual([[M2, false], [M1, true]]);
 
-        act(() => { b.socket.frame(msg(M3, PEER, "third")); });
-        expect(view.result.current.messages.map((m) => m.id)).toEqual([M2, M1, M3]);
+        const NEW = idAt(T + 1);                                                 // taken by the server after the two
+        act(() => { b.socket.frame(msg(NEW, PEER, "third")); });
+        expect(view.result.current.messages.map((m) => m.id)).toEqual([M2, M1, NEW]);
 
         act(() => { b.store.dispatch(b.m.chatUi.setSelectedChatId(null)); });
-        await onDisk(b, [M2, M1, M3]);
+        await onDisk(b, [M2, M1, NEW]);
         expect(view.result.current.messages).toEqual([]);
         view.unmount();
     });
@@ -598,23 +605,90 @@ describe("story 2: the older pages and the order", () => {
         expect(other.m.history.selectChatHistory(other.store.getState(), CHAT)?.noOlder).toBe(true);
     });
 
-    it("2.6: the order on the screen does not change when the history is read again: the time is the server's", async () => {
-        const {b, chat} = await opened();                                        // M1 at T
+    // Finding 20 of the audit. The time in a frame is the time of the delivery — the server writes it anew at
+    // every attempt; the time in the history is the time the server took the message in, the one in its id.
+    it("2.6: the order on the screen does not change when the history is read again: a message's time is the time the server took it", async () => {
+        const {b, chat} = await opened();
+        const A = idAt(T + 1000), B = idAt(T + 2000), MINE = idAt(T + 3000);
+        b.socket.frame(msg(B, PEER, "b", T + 2100));
+        b.socket.frame(msg(A, PEER, "a", T + 9000));                             // taken first, delivered at the second attempt
         await b.m.service.chatMessagesService.enqueueChatMessage(b.store.dispatch, "hello", MY, CHAT, PEER);
         const queued = b.queue()[0].id;
-        b.socket.frame({type: "CHAT_ACK", conversationId: CHAT, correlationId: queued, serverMessageId: M2, serverTimestamp: T + 1000});
-        b.socket.frame(msg(M3, PEER, "third", T + 2500));                        // the frame's clock is not the table's
-        expect(shown(b)).toEqual([M1, M2, M3]);
+        b.socket.frame({type: "CHAT_ACK", conversationId: CHAT, correlationId: queued, serverMessageId: MINE, serverTimestamp: T + 3050});
+        expect(shown(b)).toEqual([M1, A, B, MINE]);
 
         const reread = chat.reread();
         await b.server.history(CHAT).answer([
-            msg(M1, PEER, "first", T),
-            row({id: M2, chat: CHAT, from: MY, to: PEER, body: "hello", clientId: queued, at: T + 1000}),
-            msg(M3, PEER, "third", T + 2000),
+            msg(M1, PEER, "first"), msg(A, PEER, "a", T + 1000), msg(B, PEER, "b", T + 2000),
+            row({id: MINE, chat: CHAT, from: MY, to: PEER, body: "hello", clientId: queued, at: T + 3000}),
         ]);
         await reread;
-        expect(shown(b)).toEqual([M1, M2, M3]);
-        expect(ids(b)).toEqual([M1, M2, M3]);
-        expect(b.screen(CHAT)?.map((m) => m.createdAt.getTime())).toEqual([T, T + 1000, T + 2000]);
+        expect(shown(b)).toEqual([M1, A, B, MINE]);
+        expect(ids(b)).toEqual([M1, A, B, MINE]);
+        expect(b.screen(CHAT)?.slice(1).map((m) => m.createdAt.getTime())).toEqual([T + 1000, T + 2000, T + 3000]);
+    });
+});
+
+// T320 — the edges of story 2.
+describe("story 2: the edges", () => {
+    afterEach(stop);
+
+    it("the socket changes twice while the history is read: the chat is read once more, under the last connection", async () => {
+        const {b, chat} = await opened();                                        // read under connection 1
+        const reread = chat.reread();
+        await b.until(() => b.server.history(CHAT).waiting() === 1, "the request");
+        b.socket.drop();
+        b.socket.connect();
+        b.socket.drop();
+        const last = b.socket.connect();
+        b.socket.frame(msg(M2, PEER, "second"));                                 // came under the last connection
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);           // the answer proves nothing
+        await reread;
+        expect(ids(b)).toEqual([M1, M2]);
+        expect(b.stale(CHAT)).toBe(true);
+
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first"), msg(M2, PEER, "second")]);
+        await b.until(() => !b.stale(CHAT), "the chat to be complete");
+        expect(b.m.history.selectChatHistory(b.store.getState(), CHAT)?.readEpoch).toBe(last);
+        expect(ids(b)).toEqual([M1, M2]);
+        await b.settle();
+        expect(b.server.history(CHAT).asked()).toBe(3);                          // the first, the one in question, one more
+    });
+
+    it("the answer comes after the chat has left the screen: the chat takes it, the disk gets it, opening asks nothing", async () => {
+        const b = await bench();
+        await b.signIn(MY);
+        b.socket.connect();
+        const chat = b.open(CHAT);
+        await b.until(() => b.server.history(CHAT).waiting() === 1, "the request");
+        await chat.close();
+        expect(await b.m.db.loadHistoryFromDB(CHAT)).toBeNull();                 // nothing to write yet
+        b.socket.frame(msg(M2, PEER, "second"));
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
+        await chat.read;
+        expect(ids(b)).toEqual([M1, M2]);
+        await onDisk(b, [M1, M2]);
+
+        await b.open(CHAT).read;
+        expect(b.server.history(CHAT).asked()).toBe(1);
+    });
+
+    it("a message for a chat that is neither in memory nor on the disk: acknowledged, marked unread, read from the server when opened", async () => {
+        const first = await bench();
+        await first.signIn(MY);
+        const b = await first.restart();
+        await b.signIn(MY);
+        b.socket.connect();
+        b.socket.frame(msg(M1, PEER, "first"));
+        expect(b.socket.sent("CHAT_ACK")).toHaveLength(1);
+        expect(b.screen(CHAT)).toBeUndefined();
+        expect(b.store.getState().chatUi.unreadByChat[CHAT]).toBe(true);
+        expect(await b.m.db.loadHistoryFromDB(CHAT)).toBeNull();
+
+        const chat = b.open(CHAT);
+        await b.server.history(CHAT).answer([msg(M1, PEER, "first")]);
+        await chat.read;
+        expect(ids(b)).toEqual([M1]);
+        expect(b.stale(CHAT)).toBe(false);
     });
 });

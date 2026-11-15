@@ -4,7 +4,7 @@ import type {AppDispatch, RootState} from "@/store/store.ts";
 import {chatApi} from "@/features/chat/rest/chatApi.ts";
 import {groupApi} from "@/features/groups/rest/groupApi.ts";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
-import {wireToChatMessage} from "@/features/chat/model/mapper.ts";
+import {takenAt, wireToChatMessage} from "@/features/chat/model/mapper.ts";
 import {ackTaken, answerTaken, rowFixed, selectRows, socketRow} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {buildChatAck, buildReadIn, type WireMessage} from "@/features/chat/model/schema/wireMessage.schema.ts";
 import {markChatUnread, setPeerLastReadId, setTyping} from "@/features/chat/model/slices/chatUiSlice.ts";
@@ -132,6 +132,8 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             const msg = wireToChatMessage(frame);
             const chatId = msg.chatId;
             if (!chatId) break;
+            // the frame's time is the time of this delivery; the row keeps the time the message was taken in
+            msg.createdAt = new Date(takenAt(msg.id, msg.createdAt.getTime()));
 
             // SECRET (E2EE) message: the wire body is an opaque envelope. Store a placeholder now, then
             // decrypt asynchronously (the ratchet is async + single-writer) and patch the row's text in.
@@ -273,7 +275,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             // messageId — that is the ack frame's own id.
             dispatch(markSent(frame.correlationId));
             const chatId = frame.conversationId ?? selectedChatId;
-            const at = frame.serverTimestamp;
+            const at = takenAt(frame.serverMessageId, frame.serverTimestamp);
             // The STORED server ULID (backend contract: CHAT_ACK.serverMessageId — capture it!).
             // NOT messageId (that is the ack frame's own id). Reconciling my optimistic echo to it
             // lets a just-sent message match the peer's read watermark and flip to ✓✓ without a reload.
