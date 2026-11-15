@@ -33,6 +33,8 @@ export type OutboxState = {
     messages: OutboxMessage[];
     outboxVersion: number;
     persistedVersion: number;
+    /** The stored queue has been read from the disk into this one; until then the queue is not written. */
+    restored: boolean;
 };
 
 

@@ -13,13 +13,13 @@ const queued = (id: string) => ({id, idempotencyKey: id, payload: {}, status: "p
 
 async function start() {
     vi.resetModules();
-    const {configureAppStore, hydrateStore} = await import("@/store/store");
+    const {configureAppStore, hydrateStore, restoreOutbox} = await import("@/store/store");
     const db = await import("@/features/chat/db/db");
     const drafts = await import("@/features/chat/model/drafts");
     const secret = await import("@/features/chat/model/slices/secretChatsSlice");
     const outbox = await import("@/features/chat/model/slices/outboxSlice");
     const lists = await import("@/features/chat/model/sealedLists.ts");
-    return {configureAppStore, hydrateStore, db, drafts, secret, outbox, lists};
+    return {configureAppStore, hydrateStore, restoreOutbox, db, drafts, secret, outbox, lists};
 }
 
 describe("startup restore of the sealed lists (Android app)", () => {
@@ -43,6 +43,7 @@ describe("startup restore of the sealed lists (Android app)", () => {
         store.dispatch(m.secret.markSecret("c-new"));                    // before the restore
         store.dispatch(m.outbox.enqueueMessage(queued("fresh") as never));
         await m.hydrateStore(store);                                    // does not wait for the restore
+        void store.dispatch(m.restoreOutbox());                         // the queue: once a user is signed in
 
         await vi.waitFor(() => expect(store.getState().secretChats.byId).toEqual({"c-old": true, "c-off": false, "c-new": true}), {timeout: 5000});
         expect(Object.keys(store.getState().stickyChats.byId)).toEqual(["c-sticky"]);
@@ -62,6 +63,7 @@ describe("startup restore of the sealed lists (Android app)", () => {
         const n = await start();
         const next = n.configureAppStore(webrtc);
         await n.hydrateStore(next);
+        await next.dispatch(n.restoreOutbox());
         await vi.waitFor(() => expect(next.getState().secretChats.byId).toEqual({"c-old": true, "c-off": false, "c-new": true}), {timeout: 5000});
         expect(n.drafts.loadDraft("c-plain")).toBe("half a sentence");
         expect(next.getState().outbox.messages.map((x) => x.id)).toEqual(["stored", "fresh"]);

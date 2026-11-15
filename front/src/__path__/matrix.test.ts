@@ -23,7 +23,8 @@ const matrix = new Map(rows(specs[SPEC + "test-matrix.md"]).filter((r) => /^\d+\
 const tests = new Map<string, string[]>();
 for (const [path, text] of Object.entries(sources)) {
     if (!/^\/src\/__path__\/.*\.test\.tsx?$/.test(path)) continue;
-    for (const m of text.matchAll(/\b(?:it|test|describe)(?:\.\w+)*\(\s*[`"'](\d+\.\d+):/g)) {
+    // it("2.1: …"), describe("3.5: …"), it.each(DISKS)("3.1: … (%s)")
+    for (const m of text.matchAll(/\b(?:it|test|describe)(?:\.\w+)*(?:\([^()\n]*\))?\(\s*[`"'](\d+\.\d+):/g)) {
         const files = tests.get(m[1]) ?? [];
         if (!files.includes(path)) files.push(path);
         tests.set(m[1], files);
@@ -50,6 +51,15 @@ describe("the table of scenarios and the coverage threshold", () => {
         const wrong = [...matrix].filter(([scenario, cell]) =>
             cell !== "" && !(tests.get(scenario) ?? []).some((file) => cell.includes(fileName(file))));
         expect(wrong).toEqual([]);
+    });
+
+    // The audit of 2026-11-14 (specs/002-reliable-delivery/audit.md) proved seven findings with tests, A1–A7,
+    // each stating the defect as it was. The pull request that fixed a finding turned its test over and gave
+    // it the number of its scenario. All seven are turned over; this keeps their scenarios under test.
+    it("1.2: every finding of the audit proved by a test (A1–A7) has the test of its scenario on the bench", () => {
+        const turnedOver = {A1: "2.1", A2: "2.2", A3: "3.1", A4: "3.4", A5: "2.4", A6: "2.3", A7: "3.2"};
+        const without = Object.entries(turnedOver).filter(([, scenario]) => !tests.has(scenario)).map(([finding]) => finding);
+        expect(without).toEqual([]);
     });
 
     // SC-004: the messages of a chat live in the chatHistory slice; the cache of a request holds none.

@@ -8,7 +8,7 @@ import {takenAt, wireToChatMessage} from "@/features/chat/model/mapper.ts";
 import {ackTaken, answerTaken, rowFixed, selectRows, socketRow} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {buildChatAck, buildReadIn, type WireMessage} from "@/features/chat/model/schema/wireMessage.schema.ts";
 import {markChatUnread, setPeerLastReadId, setTyping} from "@/features/chat/model/slices/chatUiSlice.ts";
-import {markSent} from "@/features/chat/model/slices/outboxSlice.ts";
+import {markSent, markFailed} from "@/features/chat/model/slices/outboxSlice.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {playNotificationSound} from "@/shared/sound/notify.ts";
 import {showDesktopNotification} from "@/features/notifications";
@@ -302,6 +302,13 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             const chatId = frame.conversationId;
             const p = frame.payload as {kind?: string; body?: string} | undefined;
             const kind = p?.kind;
+            // The server refused my message as invalid (its chat is gone, it is not mine to write to): it
+            // will never be taken, so it is "not sent" now and not after the retries run out. An
+            // overloaded server ("overloaded") is not a refusal: the message is sent again.
+            if (kind === "event" && p?.body === "invalid" && frame.correlationId) {
+                dispatch(markFailed(frame.correlationId));
+                break;
+            }
             if (chatId && (kind === "member_joined" || kind === "member_left")) {
                 dispatch(chatApi.util.invalidateTags([{type: "Chat", id: `group-members:${chatId}`}]));
                 // If *I* am the subject, my groups LIST changed — refetch it so a group I was just added

@@ -89,7 +89,7 @@ export default defineConfig({
             // The check fails below these (FR-004). They are what the tests reach today, rounded down, and
             // only go up: every pull request of spec 003 raises them to what it reaches, and T376 sets the
             // target — lines 90, branches 80. Lowering a number to get a green check is not allowed.
-            thresholds: {lines: 86, branches: 77},
+            thresholds: {lines: 87, branches: 78},
         },
     },
 });

@@ -1,12 +1,12 @@
 import {createSlice, type PayloadAction} from "@reduxjs/toolkit";
 import type {OutboxMessage, OutboxState} from "@/features/chat/model/types.ts";
 import {logger} from "@/shared/logger/logger.ts";
-import {clearUser} from "@/features/auth";
 
 const initialState: OutboxState = {
     messages: [],
     outboxVersion: 0,
     persistedVersion: 0,
+    restored: false,
 };
 
 function bumpVersion() {
@@ -17,18 +17,24 @@ const outboxSlice = createSlice({
     name: "outbox",
     initialState,
     reducers: {
-        hydrateOutbox(state, action: PayloadAction<OutboxState>) {
-            logger.debug("state hydrated ", state);
-            return action.payload;
-        },
-
-        // Android app: the stored queue is read after the phone is unlocked, so messages may have been
-        // queued meanwhile. The stored ones go first; nothing already in the queue is replaced.
-        mergeOutbox(state, action: PayloadAction<OutboxState>) {
+        // The stored queue is read after the owner of the device is known (and, in the Android app, after
+        // the phone is unlocked), so messages may have been queued meanwhile. The stored ones go first;
+        // nothing already in the queue is replaced (FR-025). `null` — nothing is stored.
+        mergeOutbox(state, action: PayloadAction<Pick<OutboxState, "messages"> | null>) {
+            state.restored = true;
             const have = new Set(state.messages.map((m) => m.id));
             const stored = (action.payload?.messages ?? []).filter((m) => !have.has(m.id));
             if (stored.length === 0) return;
             state.messages = [...stored, ...state.messages];
+            state.outboxVersion = bumpVersion();
+        },
+
+        // Sign-out, or another account on this device: no message of the queue may be sent under the next
+        // session. The disk is erased by the caller; the queue is read again at the next sign-in.
+        // The end of a session (a 401) is NOT this: the same user signs in again to the same queue (FR-020).
+        clearOutbox(state) {
+            state.messages = [];
+            state.restored = false;
             state.outboxVersion = bumpVersion();
         },
 
@@ -93,21 +99,11 @@ const outboxSlice = createSlice({
             state.persistedVersion = action.payload;
         },
     },
-    extraReducers: (builder) => {
-        // On logout, drop every queued message so it can never be re-flushed under the NEXT user's
-        // session on this device (that would misattribute user A's message to user B). Bump the
-        // version so the debounced persister overwrites the IndexedDB copy with the empty outbox
-        // (LogoutPage also clears the DB directly, but this keeps in-memory + persisted consistent).
-        builder.addCase(clearUser, (state) => {
-            state.messages = [];
-            state.outboxVersion = bumpVersion();
-        });
-    },
 });
 
 export const {
-    hydrateOutbox,
     mergeOutbox,
+    clearOutbox,
     enqueueMessage,
     markSending,
     markSent,

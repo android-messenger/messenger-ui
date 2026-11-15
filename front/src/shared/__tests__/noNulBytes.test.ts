@@ -18,8 +18,7 @@ describe("sources", () => {
         expect(Object.keys(sources).filter((p) => sources[p].includes(NUL))).toEqual([]);
     });
 
-    it("the comparison keys still separate their parts, now with the escape sequence", () => {
-        expect(count("/src/features/chat/thunk/readHistory.ts", ESC)).toBe(2);
+    it("the comparison key still separates its parts, now with the escape sequence", () => {
         expect(count("/src/features/chat/model/services/chatMessages.service.ts", ESC)).toBe(1);
     });
 });

@@ -1,4 +1,4 @@
-import {dropForeignCache, type AppDispatch} from "@/store/store";
+import {dropForeignCache, restoreOutbox, type AppDispatch} from "@/store/store";
 import {setUser} from "@/features/auth/slices/userSlice.ts";
 import {startE2eeUpkeep, ensureE2eeOwner} from "@/features/e2ee";
 import {markLogin} from "@/shared/diag/diag.ts";
@@ -19,6 +19,9 @@ export async function enterSession(dispatch: AppDispatch, identity: SessionIdent
     // interrupted logout) is erased here (spec 001, FR-005, FR-006). Never throws.
     // The chat cache has no owner mark of its own: it goes together with the E2EE data.
     if (await ensureE2eeOwner(identity.id)) await dispatch(dropForeignCache());
+    // Only now is the send queue read from the disk: it is this user's (spec 003, FR-021). Not waited for —
+    // in the Android app the read waits for the phone to be unlocked.
+    void dispatch(restoreOutbox());
 
     // Kratos `traits.name` may be a string OR an object ({first,last}),
     // depending on the identity schema. Coerce to a non-empty string so the

@@ -9,17 +9,15 @@ import type {ChatMessage} from "@/features/chat/model/schema/domainChatMessage.s
 import {logger} from "@/shared/logger/logger";
 
 /**
- * My messages of this chat that are still in the send queue, as rows. The server's rows carry no client
- * id, so a queued message whose ACK was lost cannot be matched to its own server row by id: a queued
- * message with the same text and kind as one of my rows in the answer is taken as delivered and left out.
+ * My messages of this chat that are still in the send queue, as rows. A queued message and the server's
+ * row of it (its confirmation was lost) are one message by the client id alone — the server gives it back
+ * as `correlationId` in every row of the history (FR-022). Never by the text: "ok" sent twice is two messages.
  */
-function queuedRows(state: RootState, chatId: string, myId: string, answer: ChatMessage[]): ChatMessage[] {
-    const mine = new Set(answer.filter((m) => m.from === myId).map((m) => `${m.kind ?? ""}\0${m.text}`));
+function queuedRows(state: RootState, chatId: string, myId: string): ChatMessage[] {
     const rows: ChatMessage[] = [];
     for (const o of state.outbox?.messages ?? []) {
         const p = o.payload;
         if (p?.conversationId !== chatId) continue;
-        if (mine.has(`${p.payload?.kind ?? ""}\0${p.payload?.body ?? ""}`)) continue;
         rows.push({
             id: o.id,
             clientId: o.id,
@@ -96,7 +94,7 @@ async function readOnce(chatId: string, dispatch: AppDispatch, getState: () => R
         answer,
         whole: answer.length < HISTORY_PAGE_SIZE,
         epoch: proved ? startedUnder : null,
-        queued: queuedRows(getState(), chatId, myId, answer),
+        queued: queuedRows(getState(), chatId, myId),
     }));
 
     // The device's copy of the chat (secret rows are dropped inside saveHistoryToDB).

@@ -1,7 +1,8 @@
 import {sealing} from "@/features/chat/db/sealed.ts";
 
-// Android app: the list of secret chats, the sticky chats, the drafts and the send queue are sealed records
-// (features/chat/db), read after the start by the store (restoreSealed). Until that read has ended — with
+// Android app: the list of secret chats, the sticky chats and the drafts are sealed records
+// (features/chat/db), read after the start by the store (restoreSealed). The send queue is sealed too and
+// is read after the sign-in (restoreOutbox). Until the read of the lists has ended — with
 // "nothing stored", "read" or "the key is lost for good" — two things hold:
 //  - nothing is SENT: whether a chat is secret is not known yet, and a message typed into a secret chat
 //    would go out in the clear (audit 2026-11-13, U-1);

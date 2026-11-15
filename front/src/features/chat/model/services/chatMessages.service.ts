@@ -92,7 +92,11 @@ export const chatMessagesService = {
         return dispatch(readHistory(chatId));
     },
 
-
+    /**
+     * Puts a text message into the send queue and on the screen. Resolves to true once it is queued, to
+     * false if it was refused before that (the caller keeps the typed text — FR-023); the user has been
+     * told why.
+     */
     async enqueueChatMessage(
         dispatch: AppDispatch,
         text: string,
@@ -102,17 +106,17 @@ export const chatMessagesService = {
         orderId?: string,
         secret = false,
         meta?: Record<string, string>,
-    ) {
+    ): Promise<boolean> {
         // No recipientId requirement: a GROUP send carries an empty recipientId (the server fans out to
         // the roster by conversationId). A 1:1 still passes its counterpart, so nothing changes there.
-        if (!conversationId || !text.trim()) return;
+        if (!conversationId || !text.trim()) return false;
 
         // Android app: until the list of secret chats is read from its sealed record, whether this chat is
         // secret is not known — `secret` from the caller would be false for every chat. Nothing is queued.
         // Every text send (typed, forwarded) comes through here.
         if (!listsReady()) {
             toast.error(i18n.t(LISTS_NOT_READY_KEY));
-            return;
+            return false;
         }
 
         // Idempotency guard against a double-fire of a single user action: Enter AND the Send button
@@ -124,9 +128,11 @@ export const chatMessagesService = {
         const now = Date.now();
         if (key === lastEnqueue.key && now - lastEnqueue.at < DUP_SEND_WINDOW_MS) {
             logger.debug("duplicate send suppressed (idempotency window)");
-            return;
+            return false;
         }
         lastEnqueue = {key, at: now};
+        // A send that was refused is not a send: the same text may be tried again at once.
+        const refused = () => { if (lastEnqueue.key === key && lastEnqueue.at === now) lastEnqueue = {key: "", at: 0}; return false as const; };
 
         logger.debug("sending chat message via a queue");
 
@@ -138,7 +144,7 @@ export const chatMessagesService = {
             // A secret chat with no known recipient cannot be encrypted. Never send it in the clear.
             logger.error("e2ee: secret chat without a recipient — NOT sending (fail-closed)");
             toast.error(i18n.t("chat.encryptFailed"));
-            return;
+            return refused();
         }
         if (secret && recipientId) {
             try {
@@ -148,7 +154,7 @@ export const chatMessagesService = {
                 // The user is told why (no device, not in the app, a key that failed the check, a verified
                 // contact whose key changed, no connection to the key directory); anything else is generic.
                 toast.error(i18n.t(sendFailureKey(e)));
-                return;
+                return refused();
             }
         }
 
@@ -187,5 +193,6 @@ export const chatMessagesService = {
         dispatch(echoPut({chatId: conversationId, row: optimistic}));
 
         dispatch(flushOutbox());
+        return true;
     },
 };
