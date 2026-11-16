@@ -43,6 +43,7 @@ export const MESSAGE_PATH = [
     "src/infrastructure/slices/websocketSlice.ts",
     "src/infrastructure/ws/frameBridge.ts",
     "src/features/chat/middleware/chatMiddleware.ts",
+    "src/features/chat/incoming/*.ts",
     "src/features/chat/rest/chatApi.ts",
     "src/features/chat/thunk/*.ts",
     "src/features/chat/model/services/chatMessages.service.ts",
@@ -72,7 +73,7 @@ export const MESSAGE_PATH = [
     "src/store/logout.ts",
     "src/features/auth/middleware/authErrorMiddleware.ts",
     "src/features/auth/model/enterSession.ts",
-    "src/infrastructure/native/NativeAppBridge.tsx",
+    "src/features/native/NativeAppBridge.tsx",
     "src/infrastructure/native/appLifecycle.ts",
 ];
 

@@ -26,10 +26,11 @@ const websocketSlice = createSlice({
       state.status = "connected";
       state.error = null;
       state.superseded = false;
-      // A new connection "epoch". The outbox resends an un-ACKed message at most once per epoch,
-      // so a message already sent on the current (still-open) socket is NOT resent — that would
-      // duplicate it, because the backend assigns its own messageId and does not dedupe by the
-      // client messageId. Only a reconnect (new epoch) triggers a resend.
+      // The number of this connection. An unconfirmed message is sent once per connection: a second
+      // frame over the same socket would be a second message, the server does not join frames of one
+      // client messageId (sendOutboxThunk). A history read under a connection proves the chat complete
+      // only while that connection lives (chatHistorySlice.isStale); the "unread" marks are asked once
+      // per connection (useReconnectCatchup).
       state.epoch += 1;
     },
 

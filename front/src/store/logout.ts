@@ -11,7 +11,8 @@ import {historyForgotten} from "@/features/chat/model/slices/chatHistorySlice.ts
 /**
  * Full client-state teardown on logout, orchestrated at the composition root (store) — the ONE layer
  * allowed to reach across features. Disconnects the WS, resets the user (which cascades to the
- * chatUi / presence slices), empties the send queue and every RTK Query cache, and wipes on-disk data (IndexedDB history/outbox/
+ * chatUi, presence, sticky-chats and delivery slices), empties the send queue, the chats' rows and every
+ * RTK Query cache, and wipes on-disk data (IndexedDB history/outbox/
  * media + localStorage drafts) so the next user on this device inherits nothing. The E2EE keys and the
  * stored secret messages are erased right after this by fullLogout (wipeE2eeData).
  *

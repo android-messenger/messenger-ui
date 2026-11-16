@@ -28,7 +28,7 @@ const RecoveryPage = lazy(() => import("@/features/auth/ui/RecoveryPage.tsx"));
 const SettingsPage = lazy(() => import("@/features/auth/ui/SettingsPage.tsx"));
 const AppOnlyPage = lazy(() => import("@/features/auth/ui/AppOnlyPage.tsx"));
 // Android app glue (S1 §6): loaded only inside the app, never in the browser.
-const NativeAppBridge = lazy(() => import("@/infrastructure/native/NativeAppBridge.tsx"));
+const NativeAppBridge = lazy(() => import("@/features/native/NativeAppBridge.tsx"));
 
 function Fallback() {
     return <div className="min-h-dvh flex items-center justify-center bg-gray-200 text-gray-500">…</div>;

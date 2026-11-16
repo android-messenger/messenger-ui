@@ -34,4 +34,18 @@ export default defineConfig([
       }],
     },
   },
+  {
+    // Spec 003, FR-051: the layers below the features do not reach into them. What needs a feature
+    // (the Android app's bridge, the call service) lives in a feature or is handed in (wsMiddleware deps).
+    files: ['src/infrastructure/**/*.{ts,tsx}', 'src/shared/**/*.{ts,tsx}'],
+    ignores: ['**/__tests__/**', '**/__test__/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['@/features', '@/features/**', '**/features/**'],
+          message: 'infrastructure and shared do not import features (spec 003, FR-051).',
+        }],
+      }],
+    },
+  },
 ])

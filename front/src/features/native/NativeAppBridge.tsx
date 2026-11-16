@@ -5,6 +5,8 @@
 //   - notificationTap → open the conversation, or the call deep link (?call=…&caller=…);
 //   - the open conversation → setForegroundConversation (no notification for it);
 //   - calls → the `Call` plugin (useNativeCall, S1 §4.5, §7.3).
+// A feature, not infrastructure: it reaches into chat and call (spec 003, FR-051). The plugin wrappers it
+// uses stay in infrastructure/native and shared/platform.
 import {useEffect} from "react";
 import {useDispatch, useSelector, useStore} from "react-redux";
 import {useNavigate} from "react-router-dom";
@@ -13,8 +15,8 @@ import {push, removeListener, type PluginListenerHandle} from "@/shared/platform
 import {messengerWsUrl} from "@/shared/config/api.ts";
 import {isNotLogged} from "@/shared/utils/checks.ts";
 import {logger} from "@/shared/logger/logger.ts";
-import {setAppBackgrounded} from "./appLifecycle.ts";
-import {tapRoute} from "./tapRoute.ts";
+import {setAppBackgrounded} from "@/infrastructure/native/appLifecycle.ts";
+import {tapRoute} from "@/infrastructure/native/tapRoute.ts";
 import {noteNativeAccept} from "@/features/call/model/nativeAccept.ts";
 import {useNativeCall} from "./useNativeCall.ts";
 import {historyStale} from "@/features/chat/model/slices/chatHistorySlice.ts";

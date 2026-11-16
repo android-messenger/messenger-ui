@@ -15,6 +15,9 @@ import type {DeliveryState} from "@/features/chat/model/slices/deliverySlice.ts"
 // Whether they are read lives in the store (deliverySlice.listsReady, spec 003 FR-052). This module holds
 // only the way to the store that is running — the store itself cannot be put into the store.
 
+/** The line shown to the user when a send is refused because the lists are not read yet. */
+const LISTS_NOT_READY_KEY = "chat.storageNotReady";
+
 let current: (() => {delivery?: DeliveryState}) | null = null;
 
 /** The store only (configureAppStore): the store whose lists are asked about from now on. */
@@ -34,6 +37,3 @@ export function mayQueue(): boolean {
     toast.error(i18n.t(LISTS_NOT_READY_KEY));
     return false;
 }
-
-/** The line shown to the user when a send is refused because the lists are not read yet. */
-export const LISTS_NOT_READY_KEY = "chat.storageNotReady";

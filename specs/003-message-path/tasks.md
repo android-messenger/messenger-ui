@@ -24,7 +24,7 @@
 | 3. Неотправленное | `003-outbox` | слита (№ 34) | — |
 | 4. Без дублей | `003-no-duplicates` | слита (№ 35) | — |
 | 5. Догон | `003-catchup` | слита (№ 36) | — |
-| 6. Порядок в коде | `003-cleanup` | не начата | истории 2–5 |
+| 6. Порядок в коде | `003-cleanup` | слита (№ 37) | — |
 | Проверка на телефоне | — | не начата | APK по слову владельца |
 
 **Порядок**: 1 → 2а → 2б → 2в → 3 → 4 → 5 → 6. История 3, кроме T331, не зависит от истории 2 и может идти сразу после истории 1.
@@ -38,13 +38,13 @@
 - [x] T300 [US1] Поставить `@vitest/coverage-v8`; `npm run test:cov` в `front/package.json`; снять покрытие `main` по файлам пути сообщения и записать числа в PR и в таблицу ниже
 - [x] T301 [US1] Список файлов пути сообщения — в `front/vitest.config.ts` (`coverage.include`), один источник. Начальный состав:
   - `src/infrastructure/middleware/wsMiddleware.ts`, `src/infrastructure/slices/websocketSlice.ts`, `src/infrastructure/ws/frameBridge.ts`
-  - `src/features/chat/middleware/chatMiddleware.ts` (после T372 — его части)
+  - `src/features/chat/middleware/chatMiddleware.ts`, после T372 и его шаги — `src/features/chat/incoming/*.ts`
   - `src/features/chat/rest/chatApi.ts`, `src/features/chat/thunk/*.ts`
   - `src/features/chat/model/services/chatMessages.service.ts`, `model/slices/chatHistorySlice.ts` (до 2а — `model/historySync.ts`), `model/unreadProbe.ts`, `model/historyCache.ts`, `model/reconcileHistory.ts`, `model/mapper.ts`, `model/sealedLists.ts`, `model/drafts.ts`, `model/slices/outboxSlice.ts`, `model/slices/chatUiSlice.ts`
   - `src/features/chat/hooks/useReconnectCatchup.ts`, `useOutboxRetry.ts`, `useOutboxStatus.ts`, `useMessageComposer.ts`, `useChatMessages.ts`, `useChatAttachments.ts`, `useReadReceipts.ts`, `useWindowedHistory.ts`
   - `src/features/chat/db/db.ts`, `db/sealed.ts`
   - `src/store/store.ts`, `src/store/logout.ts`, `src/features/auth/middleware/authErrorMiddleware.ts`
-  - `src/infrastructure/native/NativeAppBridge.tsx`, `appLifecycle.ts`
+  - `src/features/native/NativeAppBridge.tsx` (до T374 — в `src/infrastructure/native/`), `src/infrastructure/native/appLifecycle.ts`
 - [x] T302 [US1] Стенд `front/src/__path__/bench.ts` (сценарий 1.1): настоящее хранилище приложения (`configureAppStore`) с настоящим `wsMiddleware` поверх поддельного `WebSocket`; сервер — ответы по требованию теста (`history(chat).answer(rows)`, `.fail()`, `.status(401)`), запись ушедших кадров; приложение — `installFakeApp` (Vault открыт или закрыт, `notifyMessage` отвечает, молчит, отказывает); `restart()` — новое хранилище на том же диске; `signIn(user)` — проверка владельца как в `RequireAuth`
 - [x] T303 [US1] Перенести A1–A7 из `front/src/__audit__/delivery.poc.test.ts` и `foreignQueue.poc.test.ts` на стенд, не меняя утверждений (сценарий 1.2). Старые файлы удалить
 - [x] T304 [US1] Тест `front/src/__path__/matrix.test.ts`: читает `specs/003-message-path/test-matrix.md` и имена тестов в `__path__`; падает, если у сценария слитой истории (отметка в «Состоянии») нет теста или у теста нет строки (сценарий 1.4)
@@ -247,14 +247,24 @@
 
 **Ветка** `003-cleanup`. Поведение не меняется: тесты историй 1–5 проходят без правок.
 
-- [ ] T370 [P] [US6] Одна функция «то же сообщение» (`historyCache.sameMessage`); `dedupMessages` и остальные места зовут её. Тест 6.1 — сторож по исходникам
-- [ ] T371 [P] [US6] Одна функция «пользователь смотрит на чат» и одна «можно отправлять». Тест 6.2
-- [ ] T372 [US6] `chatMiddleware.ts` → шаги в `features/chat/incoming/`: запись, расшифровка (одна для сокета и истории), уведомление, подтверждение, отметка; у каждого свой тест (FR-053). Тест 6.5; список T301 обновить
-- [ ] T373 [P] [US6] Состояние доставки из переменных модулей — в хранилище: номер опрошенного соединения, готовность списков; сброс вместе с пользователем (FR-052). Тест 6.4 после `401` и после выхода
-- [ ] T374 [P] [US6] Правило `eslint` (`no-restricted-imports`): `infrastructure` и `shared` не импортируют `features`; `NativeAppBridge` и `useNativeCall` переехать в `features` или получать зависимости из `store` (FR-051). Тест 6.3 — сам линтер
-- [ ] T375 [P] [US6] Комментарии против кода в `websocketSlice.ts`, `outbox.ts`, `chat.ts`; неиспользуемое удалить (FR-054)
-- [ ] T376 [US6] Порог покрытия — целевой (80 % / 80 %) по обновлённому списку; записать итоговые числа в таблицу Phase 1
-- [ ] T377 [US6] `audit.md` §5 — отметить сделанное
+- [x] T370 [P] [US6] Одна функция «то же сообщение» (`historyCache.sameMessage`); `dedupMessages` и остальные места зовут её. Тест 6.1 — сторож по исходникам
+- [x] T371 [P] [US6] Одна функция «пользователь смотрит на чат» и одна «можно отправлять». Тест 6.2
+- [x] T372 [US6] `chatMiddleware.ts` → шаги в `features/chat/incoming/`: запись, расшифровка (одна для сокета и истории), уведомление, подтверждение, отметка; у каждого свой тест (FR-053). Тест 6.5; список T301 обновить
+- [x] T373 [P] [US6] Состояние доставки из переменных модулей — в хранилище: номер опрошенного соединения, готовность списков; сброс вместе с пользователем (FR-052). Тест 6.4 после `401` и после выхода
+- [x] T374 [P] [US6] Правило `eslint` (`no-restricted-imports`): `infrastructure` и `shared` не импортируют `features`; `NativeAppBridge` и `useNativeCall` переехать в `features` или получать зависимости из `store` (FR-051). Тест 6.3 — сам линтер
+- [x] T375 [P] [US6] Комментарии против кода в `websocketSlice.ts`, `outbox.ts`, `chat.ts`; неиспользуемое удалить (FR-054)
+- [x] T376 [US6] Порог покрытия — целевой (80 % / 80 %) по обновлённому списку; записать итоговые числа в таблицу Phase 1
+- [x] T377 [US6] `audit.md` §5 — отметить сделанное
+
+**Что вышло иначе** (история 6, № 37)
+
+- T370: «то же сообщение» — `historyCache.sameMessage`; её зовут срез истории (поиск строки), слияние ответа, страница сервера (`dedupMessages`) и удаление сообщения в `chatApi`. Пятого места аудита — склейки эха по тексту — нет с истории 3. `useOutboxStatus` ничего не сравнивает: он берёт состояние очереди по номеру записи очереди, а он и есть клиентский номер. Поиск строки по одному номеру теперь находит и строку, у которой это клиентский номер; номера уникальны, лишнего не находится.
+- T371: «смотрит на чат» — `model/onScreen.ts` (`chatOnScreen`, `pageHidden`): обработка сообщения из сокета, опрос, отметки «прочитано» и догон при возврате на экран. `NativeAppBridge` сообщает приложению выбранный чат без проверки видимости, как раньше: приложение само знает, на экране ли оно. «Можно отправлять» — `sealedLists.mayQueue()`: проверка и строка отказа в одном месте; строка о пропущенном звонке не сообщение пользователя и пропускается молча через `listsReady()`.
+- T372: шаги — `incoming/record.ts` (в чат, список чатов), `secretText.ts` (текст секретного сообщения), `notify.ts` (приложению и пользователю), `acknowledge.ts` (серверу), `mark.ts` (прочитано или отметка), `copies.ts` (копии собеседника). `chatMiddleware.ts` только зовёт их по порядку. Восстановление текста — одна функция `restoreSecretText(…, "socket" | "history")`. Различия двух путей оставлены, они записаны в начале файла: истёкшее и своё сообщение — только для истории; при неудаче история просит отправителя всегда, когда есть клиентский номер, сокет — только при поправимой ошибке. Сведено к одному: текст сохраняется и под клиентским номером, и после неудачи проверяется сохранённый текст — теперь и для истории; ни тот, ни другой шаг поведения на экране не меняет.
+- T373: в хранилище, срез `delivery`: номер соединения, при котором спрашивались отметки (`useReconnectCatchup`), и готовность списков. Номер соединения прочитанной истории уже был в срезе истории (история 2). Готовность списков при выходе не сбрасывается: выход опустошает списки в памяти и на диске, и пустые — это прочитанные; сброс запретил бы отправку до перезапуска. Она уходит вместе с хранилищем — новый запуск начинает с «не прочитаны». `listsReady()` осталась функцией, читающей хранилище: модуль держит только путь к работающему хранилищу. Остались в переменных модулей, с причиной: очереди расшифровки (`peerOrder.ts`, цепочки обещаний), копии собеседника (`copies.ts`, на один запуск приложения, не на сессию), защита от двойного нажатия (`lastEnqueue`, 0,4 с).
+- T374: `NativeAppBridge.tsx` и `useNativeCall.ts` переехали в `features/native/`. Правило линтера — в `eslint.config.js`; тест 6.3 запускает сам `eslint` на подставленном файле.
+- T375: исправлены комментарии в `websocketSlice.ts` (номер соединения: для чего он), `shared/config/chat.ts` (`?since=` в коде нет), `store/logout.ts` (что сбрасывает выход). `outbox.ts` и `chatApi.ts` исправлены раньше, в историях 2 и 4; `OUTBOX_SEND_TIMEOUT_MS` используется с истории 4. `LISTS_NOT_READY_KEY` больше не экспортируется.
+- T376: целевой порог — 80 / 80. Он пройден, поэтому порог в `vitest.config.ts` остаётся на достигнутом и не снижается (FR-004); числа — в таблице «Порог сейчас».
 
 ---
 
