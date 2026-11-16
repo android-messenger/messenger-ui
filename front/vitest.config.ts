@@ -43,6 +43,7 @@ export const MESSAGE_PATH = [
     "src/infrastructure/slices/websocketSlice.ts",
     "src/infrastructure/ws/frameBridge.ts",
     "src/features/chat/middleware/chatMiddleware.ts",
+    "src/features/chat/incoming/*.ts",
     "src/features/chat/rest/chatApi.ts",
     "src/features/chat/thunk/*.ts",
     "src/features/chat/model/services/chatMessages.service.ts",
@@ -72,7 +73,7 @@ export const MESSAGE_PATH = [
     "src/store/logout.ts",
     "src/features/auth/middleware/authErrorMiddleware.ts",
     "src/features/auth/model/enterSession.ts",
-    "src/infrastructure/native/NativeAppBridge.tsx",
+    "src/features/native/NativeAppBridge.tsx",
     "src/infrastructure/native/appLifecycle.ts",
 ];
 
@@ -91,7 +92,7 @@ export default defineConfig({
             // The check fails below these (FR-004). They are what the tests reach today, rounded down, and
             // only go up: every pull request of spec 003 raises them to what it reaches, and T376 sets the
             // target — lines 90, branches 80. Lowering a number to get a green check is not allowed.
-            thresholds: {lines: 91, branches: 82},
+            thresholds: {lines: 91, branches: 83},
         },
     },
 });

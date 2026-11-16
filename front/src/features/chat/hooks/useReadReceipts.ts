@@ -5,6 +5,7 @@ import type {AppDispatch, RootState} from "@/store/store";
 import {selectRows} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {buildReadIn} from "@/features/chat/model/schema/wireMessage.schema.ts";
 import {isUlid} from "@/shared/ulid/ulid.ts";
+import {chatOnScreen} from "@/features/chat/model/onScreen.ts";
 
 /**
  * Read-receipt (READ_IN) machinery, extracted from the useChat god-hook. Owns the single source of
@@ -58,9 +59,10 @@ export function useReadReceipts(params: {
     // tab regains focus with the chat still open (mirrors the "active = open AND visible" rule).
     useEffect(() => {
         const onVisible = () => {
-            if (document.visibilityState !== "visible" || !selectedChatId) return;
-            markRead(selectedChatId);
-            sendReadReceipt(selectedChatId);
+            const chatId = chatOnScreen(selectedChatId);
+            if (!chatId) return;
+            markRead(chatId);
+            sendReadReceipt(chatId);
         };
         document.addEventListener("visibilitychange", onVisible);
         return () => document.removeEventListener("visibilitychange", onVisible);
@@ -71,18 +73,18 @@ export function useReadReceipts(params: {
     // reconnecting/suspended (the resume-from-background case) is silently dropped and the peer's ✓✓
     // never advances. Re-sending on connect delivers it. Idempotent (backend advances by GREATEST).
     useEffect(() => {
-        if (wsStatus !== "connected" || !selectedChatId) return;
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-        sendReadReceipt(selectedChatId, {requireBoundary: true});
+        const chatId = chatOnScreen(selectedChatId);
+        if (wsStatus !== "connected" || !chatId) return;
+        sendReadReceipt(chatId, {requireBoundary: true});
     }, [wsStatus, selectedChatId, sendReadReceipt]);
 
     // Report "read up to the newest message" whenever the OPEN + visible chat gains a message.
     // openChat fires a read BEFORE history is fetched (empty boundary), so we (re)send once the
     // history — and each later arrival — is present, carrying the newest server ULID. Idempotent.
     useEffect(() => {
-        if (!selectedChatId) return;
-        if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-        sendReadReceipt(selectedChatId, {requireBoundary: true});
+        const chatId = chatOnScreen(selectedChatId);
+        if (!chatId) return;
+        sendReadReceipt(chatId, {requireBoundary: true});
     }, [selectedChatId, newestMessageId, sendReadReceipt]);
 
     return {lastReadMessageId, sendReadReceipt};

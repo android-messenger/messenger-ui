@@ -11,7 +11,8 @@ vi.mock("@/features/chat/thunk/sendOutboxThunk.ts", () => ({
     flushOutbox: vi.fn(() => ({type: "test/flushOutbox"})),
 }));
 
-import {useReconnectCatchup, resetUnreadAsked} from "../useReconnectCatchup";
+import {useReconnectCatchup} from "../useReconnectCatchup";
+import deliveryReducer from "@/features/chat/model/slices/deliverySlice.ts";
 import {chatMessagesService} from "@/features/chat/model/services/chatMessages.service.ts";
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import chatHistoryReducer, {answerTaken, historyStale, isStale} from "@/features/chat/model/slices/chatHistorySlice.ts";
@@ -35,6 +36,7 @@ function makeStore(initialStatus: string) {
                     ? {status: action.status!, epoch: state.epoch + (action.status === "connected" ? 1 : 0)}
                     : state,
             chatHistory: chatHistoryReducer,
+            delivery: deliveryReducer,
         },
     });
 }
@@ -52,7 +54,6 @@ beforeEach(() => {
     refetch.mockClear();
     flush.mockClear();
     probe.mockClear();
-    resetUnreadAsked();       // the history itself starts empty: every test makes its own store
     setVisibility("visible");
 });
 afterEach(() => setVisibility("visible"));

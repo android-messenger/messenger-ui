@@ -55,9 +55,8 @@ export interface RowRef {
 
 function indexOfRow(rows: ChatMessage[] | undefined, ref: RowRef): number {
     if (!rows) return -1;
-    return rows.findIndex((m) =>
-        (!!ref.id && m.id === ref.id) ||
-        (!!ref.clientId && (m.clientId === ref.clientId || m.id === ref.clientId)));
+    const id = ref.id ?? ref.clientId;
+    return id ? rows.findIndex((m) => sameMessage(m, {id, clientId: ref.clientId})) : -1;
 }
 
 const chatHistorySlice = createSlice({

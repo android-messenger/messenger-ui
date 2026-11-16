@@ -12,7 +12,8 @@ import {preserveSelectedConversation} from "@/features/chat/model/preserveSelect
 import {secretCrypto, savePlaintext, deletePlaintextForChat} from "@/features/e2ee";
 import {sendFailureKey} from "@/features/e2ee/wire.ts";
 import {deleteChatCache} from "@/features/chat/db/db.ts";
-import {listsReady, LISTS_NOT_READY_KEY} from "@/features/chat/model/sealedLists.ts";
+import {mayQueue} from "@/features/chat/model/sealedLists.ts";
+import {chatOnScreen} from "@/features/chat/model/onScreen.ts";
 import toast from "react-hot-toast";
 import i18n from "@/shared/i18n";
 
@@ -60,8 +61,7 @@ export const chatMessagesService = {
         const myId = state.user?.id;
         if (!myId) return;
         const chats = chatApi.endpoints.getChats.select({myId})(state)?.data ?? [];
-        /** The chat the user is looking at now: selected, and the page is on the screen. */
-        const onScreen = () => (typeof document !== "undefined" && document.hidden ? null : getState().chatUi?.selectedChatId ?? null);
+        const onScreen = () => chatOnScreen(getState().chatUi?.selectedChatId);
         const under = liveEpoch(state.ws);
         const ended = () => liveEpoch(getState().ws) !== under;
         const asked = chatsToProbe(chats, onScreen());
@@ -123,10 +123,7 @@ export const chatMessagesService = {
         // Android app: until the list of secret chats is read from its sealed record, whether this chat is
         // secret is not known — `secret` from the caller would be false for every chat. Nothing is queued.
         // Every text send (typed, forwarded) comes through here.
-        if (!listsReady()) {
-            toast.error(i18n.t(LISTS_NOT_READY_KEY));
-            return false;
-        }
+        if (!mayQueue()) return false;
 
         // Idempotency guard against a double-fire of a single user action: Enter AND the Send button
         // both call sendMessage with the same text, and event jitter / double-taps repeat it — each

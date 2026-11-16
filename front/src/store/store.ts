@@ -24,7 +24,8 @@ import { e2eeRecoveryMiddleware, finishPendingE2eeWipe } from "@/features/e2ee";
 // DB functions
 import { readOutbox, saveOutboxToDB, scrubHistoryCache, dropOpenCache, clearAllLocalData, kvRead, KV } from "@/features/chat/db/db";
 import { sealing, type Read } from "@/features/chat/db/sealed.ts";
-import { listsReady, setListsReady } from "@/features/chat/model/sealedLists.ts";
+import { listsReady, bindLists } from "@/features/chat/model/sealedLists.ts";
+import deliveryReducer, { listsRead } from "@/features/chat/model/slices/deliverySlice.ts";
 import { E2EE_LS } from "@/features/e2ee/wire.ts";
 import { sweepRenamedStores } from "@/shared/storage/renamedStores.ts";
 import { erasePending, wipeAllStorage } from "@/features/diagnostics/wipeStorage.ts";
@@ -47,7 +48,6 @@ let outboxRun = 0;    // a new store, a sign-out or another account ends the rea
 export function configureAppStore(webRTCService: WebRTCService) {
     restoreRun++;
     outboxRun++;
-    setListsReady(!sealing());
     const store = configureStore({
         reducer: {
             call: callReducer,
@@ -59,6 +59,7 @@ export function configureAppStore(webRTCService: WebRTCService) {
             presence: presenceReducer,
             stickyChats: stickyChatsReducer,
             secretChats: secretChatsReducer,
+            delivery: deliveryReducer,
             [chatApi.reducerPath]: chatApi.reducer,
             [contactsApi.reducerPath]: contactsApi.reducer,
             [idsApi.reducerPath]: idsApi.reducer,
@@ -95,6 +96,8 @@ export function configureAppStore(webRTCService: WebRTCService) {
                 createCallMiddleware(webRTCService)
             ),
     });
+    // Whether the sealed lists are read is in this store, from now on (model/sealedLists.ts).
+    bindLists(store.getState);
 
     // Persist the outbox to IndexedDB, debounced: the subscriber runs on every dispatched action,
     // so coalesce a burst of outbox changes (enqueue → sending → sent) into one write.
@@ -246,7 +249,7 @@ function valueOrLocal<T>(read: Read<T>, localKey: string): T | null {
 }
 
 /**
- * Reads the three sealed lists into the store, then lets the app send and write them (setListsReady).
+ * Reads the three sealed lists into the store, then lets the app send and write them (listsRead).
  * A locked phone is waited out inside the read. A read that did not succeed for another reason (the app
  * did not answer, the Vault is closed by the app's check, a storage error) is repeated — on return to the
  * screen and every RESTORE_RETRY_MS — and until then nothing is sent and nothing stored is replaced.
@@ -266,7 +269,7 @@ async function restoreSealed(store: Pick<ReturnType<typeof configureAppStore>, "
             // What an earlier build kept in localStorage is taken only now: a retry must find it again.
             const savedDrafts = valueOrLocal(drafts, DRAFTS_KEY);
             hydrateDrafts(savedDrafts, {store: savedDrafts !== null && drafts.state !== "ok"});
-            setListsReady(true);   // from here the subscribers write: the dispatches below save what was merged
+            store.dispatch(listsRead(true));   // from here the subscribers write: the dispatches below save what was merged
             store.dispatch(hydrateSecretChats(valueOrLocal(secret, E2EE_LS.secretChats)));
             store.dispatch(hydrateSticky(valueOrLocal(sticky, STICKY_KEY)));
             const byId = store.getState().secretChats.byId;
@@ -286,7 +289,7 @@ async function restoreSealed(store: Pick<ReturnType<typeof configureAppStore>, "
  */
 export const dropForeignCache = () => async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
     restoreRun++;                       // a restore in flight gives up
-    if (sealing()) setListsReady(false);
+    if (sealing()) dispatch(listsRead(false));
     dispatch(dropOutbox());
     dispatch(clearSecretChats());
     dispatch(clearSticky());
