@@ -19,6 +19,7 @@ import i18n from "@/shared/i18n";
 import {isNativeApp, push} from "@/shared/platform.ts";
 import {isAppBackgrounded} from "@/infrastructure/native/appLifecycle.ts";
 import {markSecret} from "@/features/chat/model/slices/secretChatsSlice.ts";
+import {chatOnScreen, pageHidden} from "@/features/chat/model/onScreen.ts";
 
 // How long a "peer is typing" indicator lingers before auto-clearing if no follow-up frame.
 const TYPING_TIMEOUT_MS = 4000;
@@ -275,7 +276,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             // socket stays open for a moment after the app leaves the screen, and for the whole of a call).
             // Not taken in time, or refused — no ACK goes out (FR-043), and the server sends it again or as
             // a push. An app that has no such method (before 10191) is not asked: the ACK goes at once.
-            const hidden = typeof document !== "undefined" && document.hidden;
+            const hidden = pageHidden();
             // ACK delivery (SENT → DELIVERED; advances the server GC watermark).
             const acknowledge = () => dispatch({type: "ws/send", payload: buildChatAck(frame)});
             let told: Promise<unknown> | undefined;
@@ -300,7 +301,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
             // "Actively viewing" = the chat is open AND the tab is visible. Only then is it truly
             // read; a message that arrives while the tab is hidden is marked unread (and the
             // deferred read fires when the tab regains focus — see useChat).
-            const active = chatId === selectedChatId && !hidden;
+            const active = chatId === chatOnScreen(selectedChatId);
             if (active) {
                 // Read boundary = this just-delivered message's id (a server ULID), so the peer's
                 // durable receipt advances to it.

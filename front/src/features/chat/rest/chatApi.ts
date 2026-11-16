@@ -4,6 +4,7 @@ import {MESSENGER_API} from "@/shared/config/api.ts";
 import {HISTORY_PAGE_SIZE} from "@/shared/config/chat.ts";
 import {saveHistoryToDB} from "@/features/chat/db/db.ts";
 import {toMessages} from "@/features/chat/model/reconcileHistory.ts";
+import {sameMessage} from "@/features/chat/model/historyCache.ts";
 import {rowRemoved, rowRestored, selectRows, type ChatHistoryState} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import {toChatSummary, type RawConversation, type ChatSummary} from "@/entities/conversation";
 
@@ -167,9 +168,8 @@ export const chatApi = createApi({
             // the request fails.
             async onQueryStarted({ chatId, backendId, clientMessageId }, { dispatch, getState, queryFulfilled }) {
                 const rows = () => selectRows(getState() as unknown as {chatHistory: ChatHistoryState}, chatId);
-                const index = rows()?.findIndex((m) =>
-                    (!!backendId && m.id === backendId) ||
-                    (!!clientMessageId && (m.clientId === clientMessageId || m.id === clientMessageId))) ?? -1;
+                const id = backendId ?? clientMessageId;
+                const index = id ? rows()?.findIndex((m) => sameMessage(m, {id, clientId: clientMessageId})) ?? -1 : -1;
                 const row = index >= 0 ? rows()![index] : undefined;
                 if (row) dispatch(rowRemoved({chatId, id: row.id}));
                 try {

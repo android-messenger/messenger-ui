@@ -9,7 +9,7 @@ import {compressImage} from "@/features/chat/lib/imageCompress.ts";
 import {videoPosterBlob} from "@/features/chat/lib/videoPoster.ts";
 import {saveAttachmentBlob} from "@/features/chat/db/db.ts";
 import {files, isNativeApp} from "@/shared/platform.ts";
-import {listsReady, LISTS_NOT_READY_KEY} from "@/features/chat/model/sealedLists.ts";
+import {mayQueue} from "@/features/chat/model/sealedLists.ts";
 import {selectRows} from "@/features/chat/model/slices/chatHistorySlice.ts";
 import type {RootState} from "@/store/store";
 import {
@@ -42,7 +42,7 @@ export function useChatAttachments(
     const sendAttachment = useCallback(async (original: File) => {
         if (!selectedChatId || !original) return;
         // Same rule as for text: nothing is sent before the sealed lists are read (sealedLists.ts).
-        if (!listsReady()) { toast.error(t(LISTS_NOT_READY_KEY)); return; }
+        if (!mayQueue()) return;
         if (original.size > MAX_ATTACHMENT_BYTES) {
             toast.error(t("chat.fileTooLarge", {mb: Math.floor(MAX_ATTACHMENT_BYTES / (1024 * 1024))}));
             return;

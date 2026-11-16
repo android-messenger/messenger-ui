@@ -1,5 +1,6 @@
 import {type ChatMessage} from "@/features/chat/model/schema/domainChatMessage.schema.ts";
 import {wireToChatMessage} from "@/features/chat/model/mapper.ts";
+import {hasMessage} from "@/features/chat/model/historyCache.ts";
 import {parseWireMessage} from "@/features/chat/model/schema/wireMessage.schema.ts";
 
 // Pure history-reconciliation helpers, extracted from the RTK Query api (chatApi) so the parsing +
@@ -23,17 +24,11 @@ export function toMessages(raw: unknown): ChatMessage[] {
 }
 
 /**
- * Dedup by clientId||id, guarding against any duplicate the server returns. History rows normally
- * carry no clientId; when they do, an echo and its server row collapse to the first seen. Both the
- * dedup key AND the raw id are tracked so a later row matching either is dropped.
+ * One row per message (sameMessage), the first seen kept — guarding against a duplicate the server
+ * returns: a peer on an earlier build sends again, and every copy is stored under its own server id.
  */
 export function dedupMessages(rows: ChatMessage[]): ChatMessage[] {
-    const seen = new Set<string>();
-    return rows.filter((m) => {
-        const key = m.clientId || m.id;
-        if (seen.has(key) || seen.has(m.id)) return false;
-        seen.add(key);
-        seen.add(m.id);
-        return true;
-    });
+    const out: ChatMessage[] = [];
+    for (const m of rows) if (!hasMessage(out, m)) out.push(m);
+    return out;
 }

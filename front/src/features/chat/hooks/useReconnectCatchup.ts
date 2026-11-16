@@ -6,15 +6,12 @@ import {chatMessagesService} from "@/features/chat/model/services/chatMessages.s
 import {flushOutbox} from "@/features/chat/thunk/sendOutboxThunk.ts";
 import {logger} from "@/shared/logger/logger.ts";
 import {isStale, selectChatHistory} from "@/features/chat/model/slices/chatHistorySlice.ts";
+import {pageHidden} from "@/features/chat/model/onScreen.ts";
+import {unreadAsked} from "@/features/chat/model/slices/deliverySlice.ts";
 
 /** A failed read of the open chat is tried again after 2, 4, 8, … s, at most a minute apart (FR-040). */
 export const REREAD_FIRST_MS = 2_000;
 export const REREAD_MAX_MS = 60_000;
-
-/** The connection of the socket the "unread" marks were last asked under (spec 002 §3.2). */
-let unreadAskedUnder: number | null = null;
-/** Tests. */
-export function resetUnreadAsked(): void { unreadAskedUnder = null; }
 
 /**
  * The catch-up after a gap, so nothing that arrived while we were away is missed. Runs once for the
@@ -50,8 +47,10 @@ export function useReconnectCatchup(params: {
     // newest message of each chat.
     // Once per connection: a re-mount of the page under the same connection asks nothing.
     useEffect(() => {
-        if (wsStatus !== "connected" || unreadAskedUnder === wsEpoch) return;
-        unreadAskedUnder = wsEpoch;
+        // The connection the marks were last asked under is in the store (deliverySlice): a new session
+        // asks again.
+        if (wsStatus !== "connected" || store.getState().delivery.unreadAskedUnder === wsEpoch) return;
+        dispatch(unreadAsked(wsEpoch));
         void (async () => {
             await chatMessagesService.refetchChatsPreservingSelected(dispatch, store.getState);
             if (store.getState().ws.epoch === wsEpoch) await chatMessagesService.probeUnread(dispatch, store.getState);
@@ -106,7 +105,7 @@ export function useReconnectCatchup(params: {
     // read once, under the new connection, by the effects above.
     useEffect(() => {
         const onResume = () => {
-            if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+            if (pageHidden()) return;
             if (store.getState().ws.status !== "connected") return;
             catchUpChats();
             if (selectedChatId) Promise.resolve(reloadChatHistory()).catch(() => {});
