@@ -137,20 +137,25 @@ describe("6.5: the steps of an incoming message", () => {
         expect(b.screen(CHAT)?.[0].secret).toBe(true);
     });
 
-    it("6.5: notify — the app is told every message, with `hidden` when it is off the screen and not for a copy; a browser — nothing", async () => {
+    it("6.5: notify — the app is told every message, with `hidden` when the user is not looking at that chat and not for a copy; a browser — nothing", async () => {
         const b = await ready({app: true});
         const s = await steps();
         const m = s.recordIncoming(b.store, msg(S1, "a", {clientId: "k1"}) as never)!;
-        await s.tellApp(m, S1);
+        b.open(CHAT);
+        await s.tellApp(b.store, m, S1);                                        // looking at this chat
+        b.open("01OTHERCHAT0000000000000000");
+        await s.tellApp(b.store, m, S1);                                        // spec 002 §5, case 5: another chat open
+        b.open(CHAT);
         b.page.hide();
-        await s.tellApp(m, S1);
-        await s.tellApp({...m, copy: true}, S1);
-        expect(b.app.notified().map((n) => [n.messageId, n.senderId, n.hidden])).toEqual([[S1, PEER, false], [S1, PEER, true], [S1, PEER, false]]);
+        await s.tellApp(b.store, m, S1);                                        // the app off the screen
+        await s.tellApp(b.store, {...m, copy: true}, S1);
+        expect(b.app.notified().map((n) => [n.messageId, n.senderId, n.hidden]))
+            .toEqual([[S1, PEER, false], [S1, PEER, true], [S1, PEER, true], [S1, PEER, false]]);
         await stop();
 
         const web = await ready();
         const w = await steps();
-        expect(w.tellApp(w.recordIncoming(web.store, msg(S2, "b") as never)!, S2)).toBeUndefined();
+        expect(w.tellApp(web.store, w.recordIncoming(web.store, msg(S2, "b") as never)!, S2)).toBeUndefined();
     });
 
     it("6.5: acknowledge — at once without the app; after the app took it; never if it refused or is silent", async () => {
