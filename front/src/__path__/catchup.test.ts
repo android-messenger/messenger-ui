@@ -208,7 +208,8 @@ describe("story 5: the catch-up after a gap", () => {
             b.socket.frame(msg(S1, "hello"));                                    // the server sends it again
             await b.until(() => b.socket.sent("CHAT_ACK").length === 1, "the confirmation");
             expect(acks(b)).toHaveLength(1);
-            expect(b.app.notified().map((n) => [n.messageId, n.hidden])).toEqual([[S1, false], [S1, false]]);
+            // no chat is open: the user is not looking at this one — the app may show it (spec 002 §5, case 5)
+            expect(b.app.notified().map((n) => [n.messageId, n.hidden])).toEqual([[S1, true], [S1, true]]);
         });
 
         it("5.4: the app is silent for longer than 2 s — no confirmation, then or later", async () => {

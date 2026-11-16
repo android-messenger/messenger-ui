@@ -80,7 +80,7 @@ export const chatMiddleware: Middleware = (store) => (next) => (action) => {
                     .then((ask) => { if (ask) dispatch(reportUndecryptable({chatId: m.chatId, peerId: m.sender, items: [ask]}) as never); });
             }
             refreshListsIfUnknown(steps, m.chatId);
-            acknowledge(steps, frame, tellApp(m, frame.messageId));
+            acknowledge(steps, frame, tellApp(steps, m, frame.messageId));
             clearTypingTimer(m.chatId);
             dispatch(setTyping({chatId: m.chatId, typing: false}));
             markIncoming(steps, frame, m);
